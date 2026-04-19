@@ -3,7 +3,7 @@ import pandas as pd
 import streamlit as st
 from datetime import datetime
 
-st.write("VERSION CHECK 001")
+st.write("VERSION CHECK 002")
 HISTORY_FILE = "history.csv"
 
 def save_history(hotel, data):
