@@ -20,28 +20,6 @@ st.set_page_config(page_title="ChefBrain", layout="wide")
 # =====================
 st.markdown("""
 <style>
-.block-container {
-    padding-top: 1.2rem;
-    padding-bottom: 2rem;
-    max-width: 1400px;
-}
-.hero-box {
-    background: linear-gradient(180deg, #101828 0%, #0B1220 100%);
-    border: 1px solid rgba(255,255,255,0.06);
-    border-radius: 20px;
-    padding: 20px 24px;
-    margin-bottom: 18px;
-}
-.hero-title {
-    font-size: 36px;
-    font-weight: 800;
-    color: #F9FAFB;
-    margin-bottom: 6px;
-}
-.hero-subtitle {
-    color: #9CA3AF;
-    font-size: 14px;
-}
 .metric-card {
     background: linear-gradient(180deg, #111827 0%, #0B1220 100%);
     border: 1px solid rgba(255,255,255,0.06);
@@ -75,13 +53,6 @@ st.markdown("""
     margin-top: 10px;
     font-size: 12px;
     color: #9CA3AF;
-}
-.summary-box {
-    border-radius: 12px;
-    padding: 12px 14px;
-    margin-bottom: 10px;
-    color: #F3F4F6;
-    font-size: 15px;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -339,22 +310,21 @@ def render_metric_card(title, value_str, idx):
     arrow, color, label = get_indicator(idx)
     idx_text = "нет данных" if idx is None or pd.isna(idx) else f"{idx:+.1f}%"
 
-    st.markdown(
-        f"""
-        <div class="metric-card">
-            <div class="metric-title">{title}</div>
-            <div class="metric-value">{value_str}</div>
+    card_html = f"""
+    <div class="metric-card">
+        <div class="metric-title">{title}</div>
+        <div class="metric-value">{value_str}</div>
 
-            <div class="metric-delta" style="color:{color};">
-                <span style="font-size:16px;">{arrow}</span>
-                <span>{idx_text}</span>
-            </div>
-
-            <div class="metric-label">{label}</div>
+        <div class="metric-delta" style="color:{color};">
+            <span style="font-size:16px;">{arrow}</span>
+            <span>{idx_text}</span>
         </div>
-        """,
-        unsafe_allow_html=True
-    )
+
+        <div class="metric-label">{label}</div>
+    </div>
+    """
+
+    st.markdown(card_html, unsafe_allow_html=True)
 
 def render_summary_block(notes):
     color_map = {
