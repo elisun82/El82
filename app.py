@@ -1,22 +1,150 @@
 import os
-import pandas as pd
-import streamlit as st
+import re
 from datetime import datetime
 
+import pandas as pd
+import pdfplumber
+import streamlit as st
+
+# =====================
+# SETTINGS
+# =====================
 HISTORY_FILE = "history.csv"
-INFLATION = 8
+INFLATION = 8.0
+HOTELS = ["PALACE BRIDGE", "OLYMPIA GARDEN", "VASILIEVSKY"]
 
 st.set_page_config(page_title="ChefBrain", layout="wide")
 
-st.title("ChefBrain")
+# =====================
+# HELPERS
+# =====================
+def normalize_spaces(text: str) -> str:
+    return re.sub(r"[ \t]+", " ", text or "")
 
+def parse_number(value):
+    if value is None:
+        return None
+    s = str(value).replace(" ", "").replace(",", ".")
+    try:
+        return float(s)
+    except Exception:
+        return None
+
+def detect_hotel(text: str) -> str:
+    upper = text.upper()
+    for hotel in HOTELS:
+        if hotel in upper:
+            return hotel
+    return "UNKNOWN"
+
+def extract_section(text: str, start_label: str, end_label: str = None):
+    start = text.find(start_label)
+    if start == -1:
+        return None
+    if end_label:
+        end = text.find(end_label, start + len(start_label))
+        if end != -1:
+            return text[start:end]
+    return text[start:]
+
+def find_line(text: str, label: str):
+    pattern = rf"^{re.escape(label)}.*$"
+    match = re.search(pattern, text, flags=re.MULTILINE)
+    return match.group(0) if match else None
+
+def extract_mtd_and_ly_index(line: str):
+    """
+    Формат строки в твоём отчёте:
+    [day act] [day bud] [day ly] [day bud ind] [day ly ind]
+    [mtd act] [mtd bud] [mtd ly] [mtd bud ind] [mtd ly ind]
+    ...
+
+    Нам нужно:
+    - MTD actual = 6-е число
+    - Индекс к LY = 10-е число
+    """
+    if not line:
+        return None, None
+
+    nums = re.findall(r"\d[\d ]*(?:,\d+)?", line)
+    if len(nums) < 10:
+        return None, None
+
+    mtd_actual = parse_number(nums[5])
+    ly_index_ratio = parse_number(nums[9])
+
+    if ly_index_ratio is None:
+        ly_index_pct = None
+    else:
+        ly_index_pct = round((ly_index_ratio - 1.0) * 100, 1)
+
+    return mtd_actual, ly_index_pct
+
+def format_value(metric_name: str, value):
+    if value is None or pd.isna(value):
+        return "нет данных"
+
+    if metric_name == "Occupancy":
+        return f"{value:.1f}%"
+
+    return f"{value:,.0f}".replace(",", " ")
+
+def status_icon(idx):
+    if idx is None or pd.isna(idx):
+        return "⚪"
+    if idx > INFLATION:
+        return "🟢"
+    if idx > 0:
+        return "🟡"
+    return "🔴"
+
+# =====================
+# PDF PARSER
+# =====================
+def parse_pdf(file):
+    with pdfplumber.open(file) as pdf:
+        pages = []
+        for page in pdf.pages:
+            txt = page.extract_text() or ""
+            pages.append(normalize_spaces(txt))
+        text = "\n".join(pages)
+
+    hotel = detect_hotel(text)
+
+    accommodation = extract_section(text, "ACCOMMODATION 3675010", "BREAKFAST 3675014") or text
+    breakfast_sec = extract_section(text, "BREAKFAST 3675014", "PB MEETING & EVENTS 3675011") or text
+
+    data = {}
+
+    # Revenue = Room Revenue
+    data["Revenue"] = extract_mtd_and_ly_index(find_line(accommodation, "Room Revenue"))
+
+    # Breakfast = Total revenue inside BREAKFAST block
+    data["Breakfast"] = extract_mtd_and_ly_index(find_line(breakfast_sec, "Total revenue"))
+
+    # Occupancy
+    data["Occupancy"] = extract_mtd_and_ly_index(find_line(accommodation, "Occ-%"))
+
+    # RevPAR
+    data["RevPAR"] = extract_mtd_and_ly_index(find_line(accommodation, "RevPAR"))
+
+    # Пока берём first-match по всему документу для эффективности.
+    # Если захочешь, потом сделаем именно итоговую сводку кухни/официантов.
+    data["Kitchen"] = extract_mtd_and_ly_index(find_line(text, "Rev. / ktch. hour"))
+    data["Waiter"] = extract_mtd_and_ly_index(find_line(text, "Rev. / wtrs. Hour"))
+
+    return hotel, data
+
+# =====================
+# HISTORY
+# =====================
 def save_history(hotel, data):
     today = datetime.now().strftime("%Y-%m-%d")
 
     row = {"date": today, "hotel": hotel}
-    for k, v in data.items():
-        row[f"{k}_mtd"] = v[0]
-        row[f"{k}_idx"] = v[1]
+    for metric, values in data.items():
+        row[f"{metric}_mtd"] = values[0]
+        row[f"{metric}_idx"] = values[1]
 
     new_df = pd.DataFrame([row])
 
@@ -25,58 +153,90 @@ def save_history(hotel, data):
 
         if "hotel" not in df.columns:
             df["hotel"] = "UNKNOWN"
+        if "date" not in df.columns:
+            df["date"] = ""
 
+        for col in new_df.columns:
+            if col not in df.columns:
+                df[col] = pd.NA
+
+        df = df[~((df["date"] == today) & (df["hotel"] == hotel))]
         df = pd.concat([df, new_df], ignore_index=True)
     else:
         df = new_df
 
     df.to_csv(HISTORY_FILE, index=False)
 
-
 def load_history():
     if os.path.exists(HISTORY_FILE):
         df = pd.read_csv(HISTORY_FILE)
-
         if "hotel" not in df.columns:
             df["hotel"] = "UNKNOWN"
-
+        if "date" not in df.columns:
+            df["date"] = ""
         return df
 
     return pd.DataFrame()
 
+# =====================
+# SUMMARY
+# =====================
+def build_summary(data):
+    notes = []
 
-def show_metric(name, mtd, idx):
-    color = "green" if idx and idx > INFLATION else "red"
-    st.metric(name, f"{mtd}", f"{idx}%")
+    revenue_idx = data["Revenue"][1]
+    breakfast_idx = data["Breakfast"][1]
+    occupancy_idx = data["Occupancy"][1]
+    revpar_idx = data["RevPAR"][1]
+    kitchen_idx = data["Kitchen"][1]
+    waiter_idx = data["Waiter"][1]
 
-uploaded = st.file_uploader("Загрузи PDF")
+    if revenue_idx is not None and revenue_idx < INFLATION:
+        notes.append("Критично: выручка не перекрывает инфляцию.")
 
-if uploaded:
-    # временные тестовые данные
-    hotel = "PALACE BRIDGE"
+    if revpar_idx is not None and occupancy_idx is not None and revpar_idx > occupancy_idx:
+        notes.append("Рост идёт за счёт цены, а не загрузки.")
 
-    data = {
-        "Revenue": (120000, 5),
-        "Breakfast": (30000, 3),
-        "Occupancy": (72, -2),
-        "RevPAR": (5400, 4),
-        "Kitchen": (1600, 6),
-        "Waiter": (1300, 2),
-    }
+    if breakfast_idx is not None and breakfast_idx < INFLATION:
+        notes.append("Завтрак растёт ниже инфляции.")
 
+    if kitchen_idx is not None and waiter_idx is not None:
+        if kitchen_idx > waiter_idx:
+            notes.append("Эффективность кухни выше сервиса.")
+        elif waiter_idx > kitchen_idx:
+            notes.append("Эффективность сервиса выше кухни.")
+
+    if not notes:
+        notes.append("Критичных отклонений не найдено.")
+
+    return notes
+
+# =====================
+# UI
+# =====================
+st.title("ChefBrain")
+
+uploaded_file = st.file_uploader("Загрузи PDF", type=["pdf"])
+
+if uploaded_file:
+    hotel, data = parse_pdf(uploaded_file)
     save_history(hotel, data)
 
     st.subheader(f"Отель: {hotel}")
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Revenue", data["Revenue"][0], f"{data['Revenue'][1]}%")
-    col2.metric("Breakfast", data["Breakfast"][0], f"{data['Breakfast'][1]}%")
-    col3.metric("Occupancy", data["Occupancy"][0], f"{data['Occupancy'][1]}%")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Revenue", format_value("Revenue", data["Revenue"][0]), f"{status_icon(data['Revenue'][1])} {data['Revenue'][1]}%")
+    c2.metric("Breakfast", format_value("Breakfast", data["Breakfast"][0]), f"{status_icon(data['Breakfast'][1])} {data['Breakfast'][1]}%")
+    c3.metric("Occupancy", format_value("Occupancy", data["Occupancy"][0]), f"{status_icon(data['Occupancy'][1])} {data['Occupancy'][1]}%")
 
-    col4, col5, col6 = st.columns(3)
-    col4.metric("RevPAR", data["RevPAR"][0], f"{data['RevPAR'][1]}%")
-    col5.metric("Kitchen", data["Kitchen"][0], f"{data['Kitchen'][1]}%")
-    col6.metric("Waiter", data["Waiter"][0], f"{data['Waiter'][1]}%")
+    c4, c5, c6 = st.columns(3)
+    c4.metric("RevPAR", format_value("RevPAR", data["RevPAR"][0]), f"{status_icon(data['RevPAR'][1])} {data['RevPAR'][1]}%")
+    c5.metric("Kitchen", format_value("Kitchen", data["Kitchen"][0]), f"{status_icon(data['Kitchen'][1])} {data['Kitchen'][1]}%")
+    c6.metric("Waiter", format_value("Waiter", data["Waiter"][0]), f"{status_icon(data['Waiter'][1])} {data['Waiter'][1]}%")
+
+    st.subheader("Вывод")
+    for note in build_summary(data):
+        st.write(f"• {note}")
 
 history = load_history()
 
@@ -85,7 +245,22 @@ st.subheader("История")
 if history.empty:
     st.write("Нет данных")
 else:
-    st.dataframe(history)
+    st.dataframe(history, use_container_width=True)
 
-    st.subheader("Динамика Revenue")
-    st.line_chart(history.set_index("date")["Revenue_idx"])
+    hotel_filter = st.selectbox(
+        "Фильтр по отелю",
+        ["Все отели"] + sorted(history["hotel"].dropna().unique().tolist())
+    )
+
+    filtered = history.copy()
+    if hotel_filter != "Все отели":
+        filtered = filtered[filtered["hotel"] == hotel_filter]
+
+    if not filtered.empty:
+        st.subheader("Динамика Revenue")
+        st.line_chart(filtered.set_index("date")["Revenue_idx"])
+
+        st.subheader("Динамика RevPAR / Occupancy")
+        cols_to_show = [c for c in ["RevPAR_idx", "Occupancy_idx"] if c in filtered.columns]
+        if cols_to_show:
+            st.line_chart(filtered.set_index("date")[cols_to_show])
