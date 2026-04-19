@@ -6,11 +6,11 @@ import pandas as pd
 import pdfplumber
 import streamlit as st
 
-HISTORY_FILE = "history.csv"
+HISTORY_FILE = "history_palace.csv"
 INFLATION = 8.0
-HOTELS = ["PALACE BRIDGE", "OLYMPIA GARDEN", "VASILIEVSKY"]
+HOTEL_NAME = "PALACE BRIDGE"
 
-st.set_page_config(page_title="ChefBrain", layout="wide")
+st.set_page_config(page_title="ChefBrain Palace", layout="wide")
 
 st.markdown("""
 <style>
@@ -81,7 +81,7 @@ def parse_number(value):
             except Exception:
                 return None
 
-        # 66,1
+        # 87,2
         s = s.replace(",", ".")
         try:
             return float(s)
@@ -100,17 +100,62 @@ def parse_number(value):
     except Exception:
         return None
 
-def detect_hotel(text: str) -> str:
-    upper = text.upper()
-    for hotel in HOTELS:
-        if hotel in upper:
-            return hotel
-    return "UNKNOWN"
-
 def split_lines(text: str):
     return [line.strip() for line in text.splitlines() if line.strip()]
 
+def get_section_lines(text, start_keywords, end_keywords=None):
+    lines = split_lines(text)
+    start_idx = None
+
+    for i, line in enumerate(lines):
+        low = line.lower()
+        if all(k.lower() in low for k in start_keywords):
+            start_idx = i
+            break
+
+    if start_idx is None:
+        return []
+
+    if not end_keywords:
+        return lines[start_idx:]
+
+    for j in range(start_idx + 1, len(lines)):
+        low = lines[j].lower()
+        if all(k.lower() in low for k in end_keywords):
+            return lines[start_idx:j]
+
+    return lines[start_idx:]
+
+def find_first_line(lines, includes=None, startswith=None):
+    includes = [x.lower() for x in (includes or [])]
+    startswith = startswith.lower() if startswith else None
+
+    for line in lines:
+        low = line.lower()
+        if startswith and not low.startswith(startswith):
+            continue
+        if includes and not all(x in low for x in includes):
+            continue
+        return line
+    return None
+
+def find_last_line(lines, includes=None, startswith=None):
+    includes = [x.lower() for x in (includes or [])]
+    startswith = startswith.lower() if startswith else None
+
+    for line in reversed(lines):
+        low = line.lower()
+        if startswith and not low.startswith(startswith):
+            continue
+        if includes and not all(x in low for x in includes):
+            continue
+        return line
+    return None
+
 def extract_mtd_and_ly_index(line):
+    """
+    day act | day bud | day ly | bud ind | ly ind | MTD act | MTD bud | MTD ly | bud ind | ly ind
+    """
     if not line:
         return None, None
 
@@ -164,73 +209,11 @@ def get_indicator(idx):
         return "▲", "#F59E0B", "ниже инфляции"
     return "▲", "#22C55E", "выше инфляции"
 
-def get_status_name(idx):
-    if idx is None or pd.isna(idx):
-        return "Нет данных"
-    if idx < 0:
-        return "Критично"
-    if idx < 8:
-        return "Риск"
-    return "Рост"
-
-def find_first_line(lines, includes=None, startswith=None):
-    includes = [x.lower() for x in (includes or [])]
-    startswith = startswith.lower() if startswith else None
-
-    for line in lines:
-        low = line.lower()
-        if startswith and not low.startswith(startswith):
-            continue
-        if includes and not all(x in low for x in includes):
-            continue
-        return line
-    return None
-
-def find_last_line(lines, includes=None, startswith=None):
-    includes = [x.lower() for x in (includes or [])]
-    startswith = startswith.lower() if startswith else None
-
-    for line in reversed(lines):
-        low = line.lower()
-        if startswith and not low.startswith(startswith):
-            continue
-        if includes and not all(x in low for x in includes):
-            continue
-        return line
-    return None
-
-def get_section_lines(text, start_keywords, end_keywords=None):
-    """
-    Ищет блок между строкой, содержащей все start_keywords,
-    и первой следующей строкой, содержащей все end_keywords.
-    """
-    lines = split_lines(text)
-    start_idx = None
-
-    for i, line in enumerate(lines):
-        low = line.lower()
-        if all(k.lower() in low for k in start_keywords):
-            start_idx = i
-            break
-
-    if start_idx is None:
-        return []
-
-    if not end_keywords:
-        return lines[start_idx:]
-
-    for j in range(start_idx + 1, len(lines)):
-        low = lines[j].lower()
-        if all(k.lower() in low for k in end_keywords):
-            return lines[start_idx:j]
-
-    return lines[start_idx:]
-
 
 # =====================
-# PARSER
+# PALACE PARSER
 # =====================
-def parse_pdf(file):
+def parse_palace_pdf(file):
     with pdfplumber.open(file) as pdf:
         pages = []
         for page in pdf.pages:
@@ -238,53 +221,47 @@ def parse_pdf(file):
             pages.append(normalize_spaces(txt))
         text = "\n".join(pages)
 
-    hotel = detect_hotel(text)
     all_lines = split_lines(text)
 
     accommodation_lines = get_section_lines(text, ["accommodation"], ["breakfast"])
     breakfast_lines = get_section_lines(text, ["breakfast"], ["meeting", "events"])
     if not breakfast_lines:
-        breakfast_lines = get_section_lines(text, ["breakfast"], ["main restaurant"])
-    if not breakfast_lines:
         breakfast_lines = get_section_lines(text, ["breakfast"], ["total kitchen"])
 
+    total_fb_lines = get_section_lines(text, ["total f&b", "m&e revenue"], ["total spa"])
     total_kitchen_lines = get_section_lines(text, ["total kitchen"], ["total f&b", "m&e revenue"])
-    total_fb_lines = get_section_lines(text, ["total f&b", "m&e revenue"], ["hotel total"])
-    hotel_total_lines = get_section_lines(text, ["hotel total"], ["month", "year"])
 
     data = {}
 
-    # Revenue
-    revenue_line = find_first_line(hotel_total_lines, startswith="total revenue")
-    if not revenue_line:
-        revenue_line = find_first_line(accommodation_lines, startswith="room revenue")
+    # Revenue = Room Revenue from ACCOMMODATION
+    revenue_line = find_first_line(accommodation_lines, startswith="room revenue")
     data["Revenue"] = extract_mtd_and_ly_index(revenue_line)
 
-    # Breakfast
+    # Breakfast = Total revenue from BREAKFAST
     breakfast_line = find_first_line(breakfast_lines, startswith="total revenue")
     data["Breakfast"] = extract_mtd_and_ly_index(breakfast_line)
 
-    # Occupancy
+    # Occupancy / RevPAR from ACCOMMODATION
     occupancy_line = find_first_line(accommodation_lines, startswith="occ-%")
-    data["Occupancy"] = extract_mtd_and_ly_index(occupancy_line)
-
-    # RevPAR
     revpar_line = find_first_line(accommodation_lines, startswith="revpar")
+    data["Occupancy"] = extract_mtd_and_ly_index(occupancy_line)
     data["RevPAR"] = extract_mtd_and_ly_index(revpar_line)
 
-    # Kitchen
+    # Kitchen = TOTAL KITCHEN -> Rev. / efficient hour, fallback global last
     kitchen_line = find_first_line(total_kitchen_lines, includes=["rev.", "efficient hour"])
     if not kitchen_line:
         kitchen_line = find_last_line(all_lines, includes=["rev.", "efficient hour"])
     data["Kitchen"] = extract_mtd_and_ly_index(kitchen_line)
 
-    # Service
+    # Service = TOTAL F&B -> Rev. / wtrs. Hour, fallback BREAKFAST, then global last
     waiter_line = find_first_line(total_fb_lines, includes=["rev.", "wtrs. hour"])
+    if not waiter_line:
+        waiter_line = find_first_line(breakfast_lines, includes=["rev.", "wtrs. hour"])
     if not waiter_line:
         waiter_line = find_last_line(all_lines, includes=["rev.", "wtrs. hour"])
     data["Waiter"] = extract_mtd_and_ly_index(waiter_line)
 
-    return hotel, data
+    return HOTEL_NAME, data
 
 
 # =====================
@@ -302,12 +279,6 @@ def save_history(hotel, data):
 
     if os.path.exists(HISTORY_FILE):
         df = pd.read_csv(HISTORY_FILE)
-
-        if "hotel" not in df.columns:
-            df["hotel"] = "UNKNOWN"
-        if "date" not in df.columns:
-            df["date"] = ""
-
         for col in new_df.columns:
             if col not in df.columns:
                 df[col] = pd.NA
@@ -321,17 +292,12 @@ def save_history(hotel, data):
 
 def load_history():
     if os.path.exists(HISTORY_FILE):
-        df = pd.read_csv(HISTORY_FILE)
-        if "hotel" not in df.columns:
-            df["hotel"] = "UNKNOWN"
-        if "date" not in df.columns:
-            df["date"] = ""
-        return df
+        return pd.read_csv(HISTORY_FILE)
     return pd.DataFrame()
 
 
 # =====================
-# LOGIC
+# SUMMARY
 # =====================
 def build_summary(data):
     notes = []
@@ -377,12 +343,6 @@ def build_summary(data):
         else:
             notes.append(("Кухня и сервис на одном уровне.", "good"))
 
-    if kitchen_idx is not None and kitchen_idx < 0:
-        notes.append(("Эффективность кухни снижается.", "bad"))
-
-    if waiter_idx is not None and waiter_idx < 0:
-        notes.append(("Эффективность сервиса снижается.", "bad"))
-
     return notes
 
 def render_summary_block(notes):
@@ -423,32 +383,21 @@ def show_metric(col, name, metric_key, data):
         )
         st.markdown(f"<span class='small-label'>{label}</span>", unsafe_allow_html=True)
 
-def latest_rows_by_hotel(df):
-    if df.empty:
-        return pd.DataFrame()
-
-    return (
-        df.sort_values("date")
-          .groupby("hotel", as_index=False)
-          .tail(1)
-          .sort_values("hotel")
-    )
-
 
 # =====================
 # UI
 # =====================
 st.markdown("""
 <div class="hero-box">
-    <div class="hero-title">ChefBrain</div>
-    <div class="hero-subtitle">Загрузи PDF-отчёт, получи MTD-факт, индекс к прошлому году и управленческий вывод.</div>
+    <div class="hero-title">ChefBrain — PALACE BRIDGE</div>
+    <div class="hero-subtitle">Версия, заточенная только под отчёт Palace Bridge.</div>
 </div>
 """, unsafe_allow_html=True)
 
-uploaded_file = st.file_uploader("Загрузи PDF", type=["pdf"])
+uploaded_file = st.file_uploader("Загрузи PDF Palace Bridge", type=["pdf"])
 
 if uploaded_file:
-    hotel, data = parse_pdf(uploaded_file)
+    hotel, data = parse_palace_pdf(uploaded_file)
     save_history(hotel, data)
 
     st.subheader(f"Отель: {hotel}")
@@ -464,54 +413,11 @@ if uploaded_file:
     render_summary_block(build_summary(data))
 
 st.markdown("---")
-
 history = load_history()
-st.subheader("Сравнение отелей")
 
-if history.empty:
-    st.info("История пока пуста. Загрузите хотя бы по одному отчёту для каждого отеля.")
-else:
-    latest = latest_rows_by_hotel(history)
-
-    if latest.empty:
-        st.info("Пока недостаточно данных для сравнения.")
-    else:
-        display_cols = [
-            "hotel", "date",
-            "Revenue_idx", "Breakfast_idx", "Occupancy_idx",
-            "RevPAR_idx", "Kitchen_idx", "Waiter_idx"
-        ]
-        existing_cols = [c for c in display_cols if c in latest.columns]
-        latest_display = latest[existing_cols].copy()
-
-        rename_map = {
-            "hotel": "Hotel",
-            "date": "Date",
-            "Revenue_idx": "Revenue %",
-            "Breakfast_idx": "Breakfast %",
-            "Occupancy_idx": "Occupancy %",
-            "RevPAR_idx": "RevPAR %",
-            "Kitchen_idx": "Kitchen %",
-            "Waiter_idx": "Service %",
-        }
-        latest_display = latest_display.rename(columns=rename_map)
-
-        st.dataframe(latest_display, use_container_width=True, hide_index=True)
-
-st.markdown("---")
-
-st.subheader("История")
+st.subheader("История Palace Bridge")
 
 if history.empty:
     st.write("Нет данных")
 else:
-    hotel_filter = st.selectbox(
-        "Фильтр по отелю",
-        ["Все отели"] + sorted(history["hotel"].dropna().unique().tolist())
-    )
-
-    filtered = history.copy()
-    if hotel_filter != "Все отели":
-        filtered = filtered[filtered["hotel"] == hotel_filter]
-
-    st.dataframe(filtered, use_container_width=True)
+    st.dataframe(history, use_container_width=True)
