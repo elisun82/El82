@@ -140,7 +140,6 @@ def build_summary(d):
 
 def save_history(hotel, data):
     today = datetime.now().strftime("%Y-%m-%d")
-
     row = {"date": today, "hotel": hotel}
     for metric, values in data.items():
         row[f"{metric}_mtd"] = values[0]
@@ -149,20 +148,14 @@ def save_history(hotel, data):
     new_df = pd.DataFrame([row])
 
     if os.path.exists(HISTORY_FILE):
-    df = pd.read_csv(HISTORY_FILE)
+        df = pd.read_csv(HISTORY_FILE)
+        df = df[~((df["date"] == today) & (df["hotel"] == hotel))]
+        df = pd.concat([df, new_df], ignore_index=True)
+    else:
+        df = new_df
 
-    if "hotel" not in df.columns:
-        df["hotel"] = "UNKNOWN"
+    df.to_csv(HISTORY_FILE, index=False)
 
-    if "date" not in df.columns:
-        df["date"] = ""
-
-    df = df[~((df["date"] == today) & (df["hotel"] == hotel))]
-    df = pd.concat([df, new_df], ignore_index=True)
-else:
-    df = new_df
-
-df.to_csv(HISTORY_FILE, index=False)
 def load_history():
     if os.path.exists(HISTORY_FILE):
         return pd.read_csv(HISTORY_FILE)
@@ -207,10 +200,6 @@ st.divider()
 history = load_history()
 
 if not history.empty:
-
-    if "hotel" not in history.columns:
-        history["hotel"] = "UNKNOWN"
-
     st.subheader("История и сравнение")
     hotels = ["Все отели"] + sorted(history["hotel"].dropna().unique().tolist())
     selected_hotel = st.selectbox("Фильтр по отелю", hotels, index=0)
