@@ -6,18 +6,12 @@ import pandas as pd
 import pdfplumber
 import streamlit as st
 
-# =====================
-# SETTINGS
-# =====================
 HISTORY_FILE = "history.csv"
 INFLATION = 8.0
 HOTELS = ["PALACE BRIDGE", "OLYMPIA GARDEN", "VASILIEVSKY"]
 
 st.set_page_config(page_title="ChefBrain", layout="wide")
 
-# =====================
-# STYLES
-# =====================
 st.markdown("""
 <style>
 .block-container {
@@ -56,6 +50,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+
 # =====================
 # HELPERS
 # =====================
@@ -68,7 +63,6 @@ def parse_number(value):
 
     s = str(value).strip().replace("RUR", "").replace("%", "").strip()
 
-    # И запятая, и точка: вероятно тысячи через запятую, дробная часть через точку
     if "," in s and "." in s:
         s = s.replace(",", "")
         try:
@@ -76,11 +70,10 @@ def parse_number(value):
         except Exception:
             return None
 
-    # Только запятая: или тысячи, или десятичный разделитель
     if "," in s and "." not in s:
         parts = s.split(",")
 
-        # 24,082,425 -> тысячи
+        # 24,082,425
         if len(parts) > 1 and all(p.isdigit() for p in parts) and all(len(p) == 3 for p in parts[1:]):
             s = "".join(parts)
             try:
@@ -88,21 +81,19 @@ def parse_number(value):
             except Exception:
                 return None
 
-        # 66,1 -> дробное число
+        # 66,1
         s = s.replace(",", ".")
         try:
             return float(s)
         except Exception:
             return None
 
-    # Только точка
     if "." in s:
         try:
             return float(s)
         except Exception:
             return None
 
-    # Пробелы в тысячах
     s = s.replace(" ", "")
     try:
         return float(s)
@@ -116,37 +107,8 @@ def detect_hotel(text: str) -> str:
             return hotel
     return "UNKNOWN"
 
-def extract_section(text: str, start_label: str, end_label: str = None):
-    upper_text = text.upper()
-    start = upper_text.find(start_label.upper())
-    if start == -1:
-        return None
-
-    if end_label:
-        end = upper_text.find(end_label.upper(), start + len(start_label))
-        if end != -1:
-            return text[start:end]
-
-    return text[start:]
-
-def find_line(text: str, label: str):
-    if not text:
-        return None
-
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    label_low = label.lower()
-
-    # 1) Точное начало строки
-    for line in lines:
-        if line.lower().startswith(label_low):
-            return line
-
-    # 2) Просто содержит label
-    for line in lines:
-        if label_low in line.lower():
-            return line
-
-    return None
+def split_lines(text: str):
+    return [line.strip() for line in text.splitlines() if line.strip()]
 
 def extract_mtd_and_ly_index(line):
     if not line:
@@ -159,19 +121,15 @@ def extract_mtd_and_ly_index(line):
             .strip()
     )
 
-    # Берём все числовые токены
     tokens = re.findall(r"\d[\d\s,]*(?:[.,]\d+)?", cleaned)
     tokens = [t.strip() for t in tokens if t.strip()]
 
-    # Нужно минимум 10 значений, иначе это не та строка
     if len(tokens) < 10:
         return None, None
 
     mtd_actual = parse_number(tokens[5])
 
     idx_token = tokens[9].replace(" ", "")
-
-    # Индексы могут быть 1,07 / 1.03 / 0,92 / 0.97
     if "," in idx_token and "." in idx_token:
         idx_token = idx_token.replace(",", "")
     else:
@@ -188,16 +146,86 @@ def extract_mtd_and_ly_index(line):
 def format_value(metric_name: str, value):
     if value is None or pd.isna(value):
         return "нет данных"
-
     if metric_name == "Occupancy":
         return f"{value:.1f}%"
-
     return f"{value:,.0f}".replace(",", " ")
 
 def format_idx(idx):
     if idx is None or pd.isna(idx):
         return "нет данных"
     return f"{idx:+.1f}%"
+
+def get_indicator(idx):
+    if idx is None or pd.isna(idx):
+        return "•", "#9CA3AF", "нет данных"
+    if idx < 0:
+        return "▼", "#EF4444", "ниже LY"
+    if idx < 8:
+        return "▲", "#F59E0B", "ниже инфляции"
+    return "▲", "#22C55E", "выше инфляции"
+
+def get_status_name(idx):
+    if idx is None or pd.isna(idx):
+        return "Нет данных"
+    if idx < 0:
+        return "Критично"
+    if idx < 8:
+        return "Риск"
+    return "Рост"
+
+def find_first_line(lines, includes=None, startswith=None):
+    includes = [x.lower() for x in (includes or [])]
+    startswith = startswith.lower() if startswith else None
+
+    for line in lines:
+        low = line.lower()
+        if startswith and not low.startswith(startswith):
+            continue
+        if includes and not all(x in low for x in includes):
+            continue
+        return line
+    return None
+
+def find_last_line(lines, includes=None, startswith=None):
+    includes = [x.lower() for x in (includes or [])]
+    startswith = startswith.lower() if startswith else None
+
+    for line in reversed(lines):
+        low = line.lower()
+        if startswith and not low.startswith(startswith):
+            continue
+        if includes and not all(x in low for x in includes):
+            continue
+        return line
+    return None
+
+def get_section_lines(text, start_keywords, end_keywords=None):
+    """
+    Ищет блок между строкой, содержащей все start_keywords,
+    и первой следующей строкой, содержащей все end_keywords.
+    """
+    lines = split_lines(text)
+    start_idx = None
+
+    for i, line in enumerate(lines):
+        low = line.lower()
+        if all(k.lower() in low for k in start_keywords):
+            start_idx = i
+            break
+
+    if start_idx is None:
+        return []
+
+    if not end_keywords:
+        return lines[start_idx:]
+
+    for j in range(start_idx + 1, len(lines)):
+        low = lines[j].lower()
+        if all(k.lower() in low for k in end_keywords):
+            return lines[start_idx:j]
+
+    return lines[start_idx:]
+
 
 # =====================
 # PARSER
@@ -211,61 +239,53 @@ def parse_pdf(file):
         text = "\n".join(pages)
 
     hotel = detect_hotel(text)
+    all_lines = split_lines(text)
 
-    accommodation = extract_section(text, "ACCOMMODATION", "BREAKFAST") or text
-    breakfast_sec = (
-        extract_section(text, "BREAKFAST", "MEETING & EVENTS")
-        or extract_section(text, "BREAKFAST", "MAIN RESTAURANT")
-        or extract_section(text, "BREAKFAST", "TOTAL KITCHEN")
-        or text
-    )
+    accommodation_lines = get_section_lines(text, ["accommodation"], ["breakfast"])
+    breakfast_lines = get_section_lines(text, ["breakfast"], ["meeting", "events"])
+    if not breakfast_lines:
+        breakfast_lines = get_section_lines(text, ["breakfast"], ["main restaurant"])
+    if not breakfast_lines:
+        breakfast_lines = get_section_lines(text, ["breakfast"], ["total kitchen"])
 
-    total_kitchen_sec = extract_section(text, "TOTAL KITCHEN", "TOTAL F&B, M&E REVENUE") or ""
-    total_fb_sec = extract_section(text, "TOTAL F&B, M&E REVENUE", "HOTEL TOTAL") or ""
-    hotel_total_sec = (
-        extract_section(text, "HOTEL TOTAL", "Month Year")
-        or extract_section(text, "HOTEL TOTAL")
-        or ""
-    )
+    total_kitchen_lines = get_section_lines(text, ["total kitchen"], ["total f&b", "m&e revenue"])
+    total_fb_lines = get_section_lines(text, ["total f&b", "m&e revenue"], ["hotel total"])
+    hotel_total_lines = get_section_lines(text, ["hotel total"], ["month", "year"])
 
     data = {}
 
-    # Revenue:
-    # 1) HOTEL TOTAL -> Total revenue
-    # 2) fallback: ACCOMMODATION -> Room Revenue
-    revenue_line = find_line(hotel_total_sec, "Total revenue")
+    # Revenue
+    revenue_line = find_first_line(hotel_total_lines, startswith="total revenue")
     if not revenue_line:
-        revenue_line = find_line(accommodation, "Room Revenue")
+        revenue_line = find_first_line(accommodation_lines, startswith="room revenue")
     data["Revenue"] = extract_mtd_and_ly_index(revenue_line)
 
-    # Breakfast:
-    # BREAKFAST -> Total revenue
-    breakfast_line = find_line(breakfast_sec, "Total revenue")
+    # Breakfast
+    breakfast_line = find_first_line(breakfast_lines, startswith="total revenue")
     data["Breakfast"] = extract_mtd_and_ly_index(breakfast_line)
 
-    # Occupancy / RevPAR:
-    occupancy_line = find_line(accommodation, "Occ-%")
-    revpar_line = find_line(accommodation, "RevPAR")
+    # Occupancy
+    occupancy_line = find_first_line(accommodation_lines, startswith="occ-%")
     data["Occupancy"] = extract_mtd_and_ly_index(occupancy_line)
+
+    # RevPAR
+    revpar_line = find_first_line(accommodation_lines, startswith="revpar")
     data["RevPAR"] = extract_mtd_and_ly_index(revpar_line)
 
-    # Kitchen:
-    # 1) TOTAL KITCHEN -> Rev. / efficient hour
-    # 2) fallback: BREAKFAST -> Rev. / efficient hour
-    kitchen_line = find_line(total_kitchen_sec, "Rev. / efficient hour")
+    # Kitchen
+    kitchen_line = find_first_line(total_kitchen_lines, includes=["rev.", "efficient hour"])
     if not kitchen_line:
-        kitchen_line = find_line(breakfast_sec, "Rev. / efficient hour")
+        kitchen_line = find_last_line(all_lines, includes=["rev.", "efficient hour"])
     data["Kitchen"] = extract_mtd_and_ly_index(kitchen_line)
 
-    # Service:
-    # 1) TOTAL F&B -> Rev. / wtrs. Hour
-    # 2) fallback: BREAKFAST -> Rev. / wtrs. Hour
-    waiter_line = find_line(total_fb_sec, "Rev. / wtrs. Hour")
+    # Service
+    waiter_line = find_first_line(total_fb_lines, includes=["rev.", "wtrs. hour"])
     if not waiter_line:
-        waiter_line = find_line(breakfast_sec, "Rev. / wtrs. Hour")
+        waiter_line = find_last_line(all_lines, includes=["rev.", "wtrs. hour"])
     data["Waiter"] = extract_mtd_and_ly_index(waiter_line)
 
     return hotel, data
+
 
 # =====================
 # HISTORY
@@ -308,6 +328,7 @@ def load_history():
             df["date"] = ""
         return df
     return pd.DataFrame()
+
 
 # =====================
 # LOGIC
@@ -364,24 +385,6 @@ def build_summary(data):
 
     return notes
 
-def get_indicator(idx):
-    if idx is None or pd.isna(idx):
-        return "•", "#9CA3AF", "нет данных"
-    if idx < 0:
-        return "▼", "#EF4444", "ниже LY"
-    if idx < 8:
-        return "▲", "#F59E0B", "ниже инфляции"
-    return "▲", "#22C55E", "выше инфляции"
-
-def get_status_name(idx):
-    if idx is None or pd.isna(idx):
-        return "Нет данных"
-    if idx < 0:
-        return "Критично"
-    if idx < 8:
-        return "Риск"
-    return "Рост"
-
 def render_summary_block(notes):
     if not notes:
         return
@@ -431,6 +434,7 @@ def latest_rows_by_hotel(df):
           .sort_values("hotel")
     )
 
+
 # =====================
 # UI
 # =====================
@@ -450,7 +454,6 @@ if uploaded_file:
     st.subheader(f"Отель: {hotel}")
 
     c1, c2, c3, c4, c5, c6 = st.columns(6)
-
     show_metric(c1, "Revenue", "Revenue", data)
     show_metric(c2, "Breakfast", "Breakfast", data)
     show_metric(c3, "Occupancy", "Occupancy", data)
@@ -473,7 +476,6 @@ else:
     if latest.empty:
         st.info("Пока недостаточно данных для сравнения.")
     else:
-        # Таблица последних значений
         display_cols = [
             "hotel", "date",
             "Revenue_idx", "Breakfast_idx", "Occupancy_idx",
@@ -496,43 +498,6 @@ else:
 
         st.dataframe(latest_display, use_container_width=True, hide_index=True)
 
-        # Статус по отелям
-        st.subheader("Статус по отелям")
-        cols = st.columns(3)
-        rows = latest[["hotel", "Revenue_idx"]].sort_values("hotel").values.tolist()
-
-        for i, row in enumerate(rows[:3]):
-            hotel_name, idx = row[0], row[1]
-            arrow, color, label = get_indicator(idx)
-            status_name = get_status_name(idx)
-
-            with cols[i]:
-                st.markdown(f"**{hotel_name}**")
-                st.metric(label="", value=status_name, delta=None)
-                st.markdown(
-                    f"<span style='color:{color}; font-weight:700; font-size:18px;'>{arrow} {format_idx(idx)}</span>",
-                    unsafe_allow_html=True
-                )
-                st.markdown(f"<span class='small-label'>{label}</span>", unsafe_allow_html=True)
-
-        # График Revenue по отелям
-        st.subheader("Revenue: сравнение отелей")
-        if {"date", "hotel", "Revenue_idx"}.issubset(history.columns):
-            pivot = history.pivot_table(index="date", columns="hotel", values="Revenue_idx", aggfunc="last")
-            if pivot.shape[1] > 0:
-                st.line_chart(pivot)
-            else:
-                st.info("Пока недостаточно данных для графика Revenue.")
-
-        # График RevPAR по отелям
-        st.subheader("RevPAR: сравнение отелей")
-        if {"date", "hotel", "RevPAR_idx"}.issubset(history.columns):
-            pivot = history.pivot_table(index="date", columns="hotel", values="RevPAR_idx", aggfunc="last")
-            if pivot.shape[1] > 0:
-                st.line_chart(pivot)
-            else:
-                st.info("Пока недостаточно данных для графика RevPAR.")
-
 st.markdown("---")
 
 st.subheader("История")
@@ -550,24 +515,3 @@ else:
         filtered = filtered[filtered["hotel"] == hotel_filter]
 
     st.dataframe(filtered, use_container_width=True)
-
-    if not filtered.empty:
-        st.subheader("Динамика Revenue")
-        if "Revenue_idx" in filtered.columns:
-            if hotel_filter == "Все отели":
-                pivot = filtered.pivot_table(index="date", columns="hotel", values="Revenue_idx", aggfunc="last")
-                if pivot.shape[1] > 0:
-                    st.line_chart(pivot)
-            else:
-                st.line_chart(filtered.set_index("date")["Revenue_idx"])
-
-        st.subheader("Динамика RevPAR / Occupancy")
-        cols_to_show = [c for c in ["RevPAR_idx", "Occupancy_idx"] if c in filtered.columns]
-        if cols_to_show:
-            if hotel_filter == "Все отели":
-                metric = st.selectbox("Показатель для сравнения", cols_to_show, index=0)
-                pivot = filtered.pivot_table(index="date", columns="hotel", values=metric, aggfunc="last")
-                if pivot.shape[1] > 0:
-                    st.line_chart(pivot)
-            else:
-                st.line_chart(filtered.set_index("date")[cols_to_show])
