@@ -42,40 +42,16 @@ st.markdown("""
     color: #9CA3AF;
     font-size: 14px;
 }
-.metric-wrap {
-    background: linear-gradient(180deg, #111827 0%, #0B1220 100%);
-    border: 1px solid rgba(255,255,255,0.06);
-    border-radius: 18px;
-    padding: 16px 16px 14px 16px;
-    min-height: 150px;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.22);
-}
-.metric-title {
-    font-size: 14px;
-    color: #9CA3AF;
-    margin-bottom: 12px;
-}
-.metric-value {
-    font-size: 22px;
-    font-weight: 700;
-    color: #F9FAFB;
-    margin-bottom: 10px;
-}
-.metric-delta {
-    font-size: 18px;
-    font-weight: 700;
-    margin-bottom: 6px;
-}
-.metric-label {
-    font-size: 12px;
-    color: #9CA3AF;
-}
 .summary-box {
     border-radius: 12px;
     padding: 12px 14px;
     margin-bottom: 10px;
     color: #F3F4F6;
     font-size: 15px;
+}
+.small-label {
+    color: #9CA3AF;
+    font-size: 12px;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -92,7 +68,6 @@ def parse_number(value):
 
     s = str(value).strip().replace("RUR", "").replace("%", "").strip()
 
-    # Есть и запятая, и точка: вероятнее всего запятые = тысячи, точка = десятичная часть
     if "," in s and "." in s:
         s = s.replace(",", "")
         try:
@@ -100,11 +75,8 @@ def parse_number(value):
         except Exception:
             return None
 
-    # Есть только запятая: или тысячи, или десятичный разделитель
     if "," in s and "." not in s:
         parts = s.split(",")
-
-        # 24,082,425 -> тысячи
         if len(parts) > 1 and all(p.isdigit() for p in parts) and all(len(p) == 3 for p in parts[1:]):
             s = "".join(parts)
             try:
@@ -112,21 +84,18 @@ def parse_number(value):
             except Exception:
                 return None
 
-        # 66,1 -> десятичное число
         s = s.replace(",", ".")
         try:
             return float(s)
         except Exception:
             return None
 
-    # Есть только точка
     if "." in s:
         try:
             return float(s)
         except Exception:
             return None
 
-    # Пробелы как разделители тысяч
     s = s.replace(" ", "")
     try:
         return float(s)
@@ -172,13 +141,9 @@ def extract_mtd_and_ly_index(line):
     if len(tokens) < 10:
         return None, None
 
-    # MTD actual = 6-е число
     mtd_actual = parse_number(tokens[5])
 
-    # Индекс к LY = 10-е число
     idx_token = tokens[9].replace(" ", "")
-
-    # 1,07 / 1.03 / 0,92 / 0.97
     if "," in idx_token and "." in idx_token:
         idx_token = idx_token.replace(",", "")
     else:
@@ -202,7 +167,7 @@ def format_value(metric_name: str, value):
     return f"{value:,.0f}".replace(",", " ")
 
 # =====================
-# PDF PARSER
+# PARSER
 # =====================
 def parse_pdf(file):
     with pdfplumber.open(file) as pdf:
@@ -214,7 +179,6 @@ def parse_pdf(file):
 
     hotel = detect_hotel(text)
 
-    # Универсальные блоки для разных отелей
     accommodation = extract_section(text, "ACCOMMODATION 3675", "BREAKFAST 3675") or text
     breakfast_sec = extract_section(text, "BREAKFAST 3675", "MEETING & EVENTS") or text
 
@@ -223,20 +187,10 @@ def parse_pdf(file):
     hotel_total_sec = extract_section(text, "HOTEL TOTAL", "Month Year") or extract_section(text, "HOTEL TOTAL") or text
 
     data = {}
-
-    # Итого выручка отеля
     data["Revenue"] = extract_mtd_and_ly_index(find_line(hotel_total_sec, "Total revenue"))
-
-    # Завтрак
     data["Breakfast"] = extract_mtd_and_ly_index(find_line(breakfast_sec, "Total revenue"))
-
-    # Загрузка
     data["Occupancy"] = extract_mtd_and_ly_index(find_line(accommodation, "Occ-%"))
-
-    # RevPAR
     data["RevPAR"] = extract_mtd_and_ly_index(find_line(accommodation, "RevPAR"))
-
-    # Кухня и сервис
     data["Kitchen"] = extract_mtd_and_ly_index(find_line(total_kitchen_sec, "Rev. / efficient hour"))
     data["Waiter"] = extract_mtd_and_ly_index(find_line(total_fb_sec, "Rev. / wtrs. Hour"))
 
@@ -267,7 +221,6 @@ def save_history(hotel, data):
             if col not in df.columns:
                 df[col] = pd.NA
 
-        # Обновляем запись за этот день и отель
         df = df[~((df["date"] == today) & (df["hotel"] == hotel))]
         df = pd.concat([df, new_df], ignore_index=True)
     else:
@@ -283,11 +236,10 @@ def load_history():
         if "date" not in df.columns:
             df["date"] = ""
         return df
-
     return pd.DataFrame()
 
 # =====================
-# SUMMARY + UI HELPERS
+# SUMMARY
 # =====================
 def build_summary(data):
     notes = []
@@ -359,15 +311,13 @@ def show_metric(col, name, value, idx):
     idx_str = "нет данных" if idx is None or pd.isna(idx) else f"{idx:+.1f}%"
 
     with col:
-        st.markdown('<div class="metric-wrap">', unsafe_allow_html=True)
-        st.markdown(f'<div class="metric-title">{name}</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="metric-value">{value_str}</div>', unsafe_allow_html=True)
+        st.markdown(f"**{name}**")
+        st.metric(label="", value=value_str, delta=None)
         st.markdown(
-            f'<div class="metric-delta" style="color:{color};">{arrow} {idx_str}</div>',
+            f"<span style='color:{color}; font-weight:700; font-size:18px;'>{arrow} {idx_str}</span>",
             unsafe_allow_html=True
         )
-        st.markdown(f'<div class="metric-label">{label}</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown(f"<span class='small-label'>{label}</span>", unsafe_allow_html=True)
 
 def render_summary_block(notes):
     color_map = {
