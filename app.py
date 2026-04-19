@@ -232,74 +232,144 @@ def build_summary(data):
     kitchen_idx = data["Kitchen"][1]
     waiter_idx = data["Waiter"][1]
 
-    if revenue_idx is not None and revenue_idx < INFLATION:
-        notes.append("Критично: выручка не перекрывает инфляцию.")
+    if revenue_idx is not None:
+        if revenue_idx < 0:
+            notes.append(("Выручка ниже прошлого года.", "bad"))
+        elif revenue_idx < 8:
+            notes.append(("Выручка растёт, но не перекрывает инфляцию 8%.", "warn"))
+        else:
+            notes.append(("Выручка растёт выше инфляции.", "good"))
 
-    if revpar_idx is not None and occupancy_idx is not None and revpar_idx > occupancy_idx:
-        notes.append("Рост идёт за счёт цены, а не загрузки.")
+    if revpar_idx is not None and occupancy_idx is not None:
+        if revpar_idx > occupancy_idx:
+            notes.append(("Рост идёт скорее через цену, а не через загрузку.", "warn"))
+        elif occupancy_idx > revpar_idx:
+            notes.append(("Рост идёт скорее через загрузку, чем через цену.", "good"))
+        else:
+            notes.append(("Цена и загрузка растут сбалансированно.", "good"))
 
-    if breakfast_idx is not None and breakfast_idx < INFLATION:
-        notes.append("Завтрак растёт ниже инфляции.")
+    if breakfast_idx is not None:
+        if breakfast_idx < 0:
+            notes.append(("Завтрак просел к прошлому году.", "bad"))
+        elif breakfast_idx < 8:
+            notes.append(("Завтрак растёт ниже инфляции.", "warn"))
+        else:
+            notes.append(("Завтрак растёт стабильно.", "good"))
 
     if kitchen_idx is not None and waiter_idx is not None:
         if kitchen_idx > waiter_idx:
-            notes.append("Эффективность кухни выше сервиса.")
+            notes.append(("Кухня эффективнее сервиса.", "good"))
         elif waiter_idx > kitchen_idx:
-            notes.append("Эффективность сервиса выше кухни.")
+            notes.append(("Сервис эффективнее кухни.", "good"))
+        else:
+            notes.append(("Кухня и сервис на одном уровне.", "good"))
+
+    if kitchen_idx is not None and kitchen_idx < 0:
+        notes.append(("Эффективность кухни снижается.", "bad"))
+
+    if waiter_idx is not None and waiter_idx < 0:
+        notes.append(("Эффективность сервиса снижается.", "bad"))
 
     if not notes:
-        notes.append("Критичных отклонений не найдено.")
+        notes.append(("Критичных отклонений не найдено.", "good"))
 
     return notes
 
-# =====================
-# UI
-# =====================
-st.title("ChefBrain")
 
-uploaded_file = st.file_uploader("Загрузи PDF", type=["pdf"])
+def get_indicator(idx):
+    """
+    Возвращает:
+    arrow, color, label
+    """
+    if idx is None:
+        return "•", "#9CA3AF", "нет данных"
 
-if uploaded_file:
-    hotel, data = parse_pdf(uploaded_file)
-    save_history(hotel, data)
+    if idx < 0:
+        return "▼", "#EF4444", "ниже LY"
+    elif idx < 8:
+        return "▲", "#F59E0B", "ниже инфляции"
+    else:
+        return "▲", "#22C55E", "выше инфляции"
 
-    st.subheader(f"Отель: {hotel}")
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Revenue", format_value("Revenue", data["Revenue"][0]), f"{data['Revenue'][1]}%", delta_color="off")
-    c2.metric("Breakfast", format_value("Breakfast", data["Breakfast"][0]), f"{data['Breakfast'][1]}%", delta_color="off")
-    c3.metric("Occupancy", format_value("Occupancy", data["Occupancy"][0]), f"{data['Occupancy'][1]}%", delta_color="off")
-    c4.metric("RevPAR", format_value("RevPAR", data["RevPAR"][0]), f"{data['RevPAR'][1]}%", delta_color="off")
-    c5.metric("Kitchen", format_value("Kitchen", data["Kitchen"][0]), f"{data['Kitchen'][1]}%", delta_color="off")
-    c6.metric("Service", format_value("Waiter", data["Waiter"][0]), f"{data['Waiter'][1]}%", delta_color="off")
+def render_metric_card(title, value, idx, value_str):
+    arrow, color, label = get_indicator(idx)
 
-    st.subheader("Вывод")
-    for note in build_summary(data):
-        st.write(f"• {note}")
+    idx_text = "нет данных" if idx is None else f"{idx:+.1f}%"
 
-history = load_history()
+    st.markdown(
+        f"""
+        <div style="
+            background: linear-gradient(180deg, #111827 0%, #0B1220 100%);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 18px;
+            padding: 18px 18px 14px 18px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.22);
+            min-height: 150px;
+        ">
+            <div style="
+                font-size: 14px;
+                color: #9CA3AF;
+                margin-bottom: 10px;
+            ">{title}</div>
 
-st.subheader("История")
+            <div style="
+                font-size: 22px;
+                font-weight: 700;
+                color: #F9FAFB;
+                margin-bottom: 14px;
+            ">{value_str}</div>
 
-if history.empty:
-    st.write("Нет данных")
-else:
-    st.dataframe(history, use_container_width=True)
+            <div style="
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                font-size: 15px;
+                font-weight: 700;
+                color: {color};
+                background: rgba(255,255,255,0.03);
+                border-radius: 999px;
+                padding: 6px 10px;
+            ">
+                <span style="font-size:16px;">{arrow}</span>
+                <span>{idx_text}</span>
+            </div>
 
-    hotel_filter = st.selectbox(
-        "Фильтр по отелю",
-        ["Все отели"] + sorted(history["hotel"].dropna().unique().tolist())
+            <div style="
+                margin-top: 10px;
+                font-size: 12px;
+                color: #9CA3AF;
+            ">{label}</div>
+        </div>
+        """,
+        unsafe_allow_html=True
     )
 
-    filtered = history.copy()
-    if hotel_filter != "Все отели":
-        filtered = filtered[filtered["hotel"] == hotel_filter]
 
-    if not filtered.empty:
-        st.subheader("Динамика Revenue")
-        st.line_chart(filtered.set_index("date")["Revenue_idx"])
+def render_summary_block(notes):
+    color_map = {
+        "good": ("#22C55E", "rgba(34,197,94,0.12)"),
+        "warn": ("#F59E0B", "rgba(245,158,11,0.12)"),
+        "bad":  ("#EF4444", "rgba(239,68,68,0.12)")
+    }
 
-        st.subheader("Динамика RevPAR / Occupancy")
-        cols_to_show = [c for c in ["RevPAR_idx", "Occupancy_idx"] if c in filtered.columns]
-        if cols_to_show:
-            st.line_chart(filtered.set_index("date")[cols_to_show])
+    st.markdown("### Вывод")
+
+    for text, level in notes:
+        border, bg = color_map.get(level, ("#6B7280", "rgba(107,114,128,0.12)"))
+        st.markdown(
+            f"""
+            <div style="
+                border-left: 4px solid {border};
+                background: {bg};
+                border-radius: 12px;
+                padding: 12px 14px;
+                margin-bottom: 10px;
+                color: #F3F4F6;
+                font-size: 15px;
+            ">
+                {text}
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
