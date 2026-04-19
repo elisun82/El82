@@ -6,20 +6,37 @@ st.set_page_config(page_title="ChefBrain Excel", layout="wide")
 # =====================
 # HELPERS
 # =====================
-def extract_value_and_index(row):
-    nums = [x for x in row if isinstance(x, (int, float))]
+def parse_excel(file):
+    # читаем первый лист
+    df = pd.read_excel(file)
 
-    if len(nums) < 2:
-        return None, None
+    # убираем мусор
+    df = df.dropna(how="all")
 
-    mtd = nums[-3]   # обычно MTD ближе к концу
-    idx_ratio = nums[-1]
+    # превращаем всё в строки для поиска
+    df_str = df.astype(str)
 
-    if idx_ratio is None:
-        return mtd, None
+    def find_value(keyword):
+        for i in range(len(df_str)):
+            for j in range(len(df_str.columns)):
+                if keyword.lower() in df_str.iloc[i, j].lower():
+                    try:
+                        # берем значение справа
+                        return parse_number(df.iloc[i, j+1])
+                    except:
+                        return None
+        return None
 
-    idx_pct = (idx_ratio - 1) * 100
-    return mtd, round(idx_pct, 1)
+    data = {}
+
+    data["Revenue"] = (find_value("Total revenue"), 0)
+    data["Breakfast"] = (find_value("Breakfast"), 0)
+    data["Occupancy"] = (find_value("Occ"), 0)
+    data["RevPAR"] = (find_value("RevPAR"), 0)
+    data["Kitchen"] = (find_value("ktch"), 0)
+    data["Waiter"] = (find_value("wtrs"), 0)
+
+    return "VASILIEVSKY", data
 
 
 def format_value(name, value):
