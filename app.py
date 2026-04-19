@@ -7,36 +7,73 @@ st.set_page_config(page_title="ChefBrain Excel", layout="wide")
 # HELPERS
 # =====================
 def parse_excel(file):
-    # читаем первый лист
-    df = pd.read_excel(file)
-
-    # убираем мусор
-    df = df.dropna(how="all")
-
-    # превращаем всё в строки для поиска
+    df = pd.read_excel(file, sheet_name="Manager view", header=None)
     df_str = df.astype(str)
 
-    def find_value(keyword):
-        for i in range(len(df_str)):
-            for j in range(len(df_str.columns)):
-                if keyword.lower() in df_str.iloc[i, j].lower():
-                    try:
-                        # берем значение справа
-                        return parse_number(df.iloc[i, j+1])
-                    except:
-                        return None
-        return None
+    # --- найти строку HOTEL TOTAL ---
+    hotel_total_idx = None
+    for i in range(len(df_str)):
+        if "HOTEL TOTAL" in df_str.iloc[i, 0]:
+            hotel_total_idx = i
+            break
 
-    data = {}
+    if hotel_total_idx is None:
+        return "UNKNOWN", {}
 
-    data["Revenue"] = (find_value("Total revenue"), 0)
-    data["Breakfast"] = (find_value("Breakfast"), 0)
-    data["Occupancy"] = (find_value("Occ"), 0)
-    data["RevPAR"] = (find_value("RevPAR"), 0)
-    data["Kitchen"] = (find_value("ktch"), 0)
-    data["Waiter"] = (find_value("wtrs"), 0)
+    # --- найти Total revenue НИЖЕ HOTEL TOTAL ---
+    revenue_row = None
+    for i in range(hotel_total_idx, len(df_str)):
+        if df_str.iloc[i, 0] == "Total revenue":
+            revenue_row = df.iloc[i]
+            break
 
-    return "VASILIEVSKY", data
+    # --- Revenue ---
+    revenue_mtd = revenue_row[9] if revenue_row is not None else None
+    revenue_idx = None
+
+    if revenue_row is not None and pd.notna(revenue_row[35]):
+        revenue_idx = round((revenue_row[35] - 1) * 100, 1)
+
+    # --- Occupancy ---
+    occ_row = df[df[0] == "Occ-%"].iloc[-1]
+    occ_mtd = occ_row[2]
+    occ_idx = round((occ_row[35] - 1) * 100, 1) if pd.notna(occ_row[35]) else None
+
+    # --- RevPAR ---
+    revpar_row = df[df[0] == "RevPAR"].iloc[-1]
+    revpar_mtd = revpar_row[2]
+    revpar_idx = round((revpar_row[35] - 1) * 100, 1) if pd.notna(revpar_row[35]) else None
+
+    # --- Breakfast ---
+    breakfast_block = df[df[0] == "BREAKFAST"].index
+    if len(breakfast_block) > 0:
+        start = breakfast_block[0]
+        breakfast_row = df.iloc[start+4]  # Total revenue в блоке
+        breakfast_mtd = breakfast_row[2]
+        breakfast_idx = round((breakfast_row[35] - 1) * 100, 1) if pd.notna(breakfast_row[35]) else None
+    else:
+        breakfast_mtd, breakfast_idx = None, None
+
+    # --- Kitchen ---
+    kitchen_row = df[df[0] == "Rev. / ktch. hour"].iloc[-1]
+    kitchen_mtd = kitchen_row[2]
+    kitchen_idx = round((kitchen_row[35] - 1) * 100, 1) if pd.notna(kitchen_row[35]) else None
+
+    # --- Service ---
+    service_row = df[df[0] == "Rev. / wtrs. Hour"].iloc[-1]
+    service_mtd = service_row[2]
+    service_idx = round((service_row[35] - 1) * 100, 1) if pd.notna(service_row[35]) else None
+
+    data = {
+        "Revenue": (revenue_mtd, revenue_idx),
+        "Breakfast": (breakfast_mtd, breakfast_idx),
+        "Occupancy": (occ_mtd, occ_idx),
+        "RevPAR": (revpar_mtd, revpar_idx),
+        "Kitchen": (kitchen_mtd, kitchen_idx),
+        "Waiter": (service_mtd, service_idx),
+    }
+
+    return "PALACE BRIDGE", data
 
 
 def format_value(name, value):
