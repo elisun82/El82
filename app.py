@@ -117,28 +117,38 @@ def detect_hotel(text: str) -> str:
     return "UNKNOWN"
 
 def extract_section(text: str, start_label: str, end_label: str = None):
-    start = text.find(start_label)
+    upper_text = text.upper()
+    start = upper_text.find(start_label.upper())
     if start == -1:
         return None
+
     if end_label:
-        end = text.find(end_label, start + len(start_label))
+        end = upper_text.find(end_label.upper(), start + len(start_label))
         if end != -1:
             return text[start:end]
+
     return text[start:]
 
 def find_line(text: str, label: str):
-    pattern = rf"^{re.escape(label)}.*$"
-    match = re.search(pattern, text, flags=re.MULTILINE)
-    return match.group(0) if match else None
+    if not text:
+        return None
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    label_low = label.lower()
+
+    # 1) Точное начало строки
+    for line in lines:
+        if line.lower().startswith(label_low):
+            return line
+
+    # 2) Просто содержит label
+    for line in lines:
+        if label_low in line.lower():
+            return line
+
+    return None
 
 def extract_mtd_and_ly_index(line):
-    """
-    В отчётах структура строки обычно такая:
-    day act | day bud | day ly | bud ind | ly ind | MTD act | MTD bud | MTD ly | bud ind | ly ind | ...
-    Нам нужно:
-    - MTD actual = 6-е число
-    - индекс к LY = 10-е число
-    """
     if not line:
         return None, None
 
@@ -149,15 +159,19 @@ def extract_mtd_and_ly_index(line):
             .strip()
     )
 
+    # Берём все числовые токены
     tokens = re.findall(r"\d[\d\s,]*(?:[.,]\d+)?", cleaned)
     tokens = [t.strip() for t in tokens if t.strip()]
 
+    # Нужно минимум 10 значений, иначе это не та строка
     if len(tokens) < 10:
         return None, None
 
     mtd_actual = parse_number(tokens[5])
 
     idx_token = tokens[9].replace(" ", "")
+
+    # Индексы могут быть 1,07 / 1.03 / 0,92 / 0.97
     if "," in idx_token and "." in idx_token:
         idx_token = idx_token.replace(",", "")
     else:
@@ -197,22 +211,34 @@ def parse_pdf(file):
         text = "\n".join(pages)
 
     hotel = detect_hotel(text)
+    upper_text = text.upper()
 
-    # Универсальные блоки
-    accommodation = extract_section(text, "ACCOMMODATION 3675", "BREAKFAST 3675") or text
-    breakfast_sec = extract_section(text, "BREAKFAST 3675", "MEETING & EVENTS") or text
+    # Универсальные секции
+    accommodation = extract_section(upper_text, "ACCOMMODATION", "BREAKFAST") or upper_text
+    breakfast_sec = extract_section(upper_text, "BREAKFAST", "MEETING & EVENTS") \
+        or extract_section(upper_text, "BREAKFAST", "MAIN RESTAURANT") \
+        or extract_section(upper_text, "BREAKFAST", "TOTAL KITCHEN") \
+        or upper_text
 
-    total_kitchen_sec = extract_section(text, "TOTAL KITCHEN", "TOTAL F&B, M&E REVENUE") or text
-    total_fb_sec = extract_section(text, "TOTAL F&B, M&E REVENUE", "HOTEL TOTAL") or text
-    hotel_total_sec = extract_section(text, "HOTEL TOTAL", "Month Year") or extract_section(text, "HOTEL TOTAL") or text
+    total_kitchen_sec = extract_section(upper_text, "TOTAL KITCHEN", "TOTAL F&B, M&E REVENUE") or upper_text
+    total_fb_sec = extract_section(upper_text, "TOTAL F&B, M&E REVENUE", "HOTEL TOTAL") or upper_text
+    hotel_total_sec = extract_section(upper_text, "HOTEL TOTAL", "MONTH YEAR") \
+        or extract_section(upper_text, "HOTEL TOTAL") \
+        or upper_text
 
     data = {}
 
-    # Берём MTD и LY index
+    # HOTEL TOTAL
     data["Revenue"] = extract_mtd_and_ly_index(find_line(hotel_total_sec, "Total revenue"))
+
+    # BREAKFAST
     data["Breakfast"] = extract_mtd_and_ly_index(find_line(breakfast_sec, "Total revenue"))
+
+    # ACCOMMODATION
     data["Occupancy"] = extract_mtd_and_ly_index(find_line(accommodation, "Occ-%"))
     data["RevPAR"] = extract_mtd_and_ly_index(find_line(accommodation, "RevPAR"))
+
+    # TOTAL KITCHEN / TOTAL F&B
     data["Kitchen"] = extract_mtd_and_ly_index(find_line(total_kitchen_sec, "Rev. / efficient hour"))
     data["Waiter"] = extract_mtd_and_ly_index(find_line(total_fb_sec, "Rev. / wtrs. Hour"))
 
