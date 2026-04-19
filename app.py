@@ -3,16 +3,20 @@ import pandas as pd
 import streamlit as st
 from datetime import datetime
 
-st.write("VERSION CHECK 002")
 HISTORY_FILE = "history.csv"
+INFLATION = 8
+
+st.set_page_config(page_title="ChefBrain", layout="wide")
+
+st.title("ChefBrain")
 
 def save_history(hotel, data):
     today = datetime.now().strftime("%Y-%m-%d")
 
     row = {"date": today, "hotel": hotel}
-    for metric, values in data.items():
-        row[f"{metric}_mtd"] = values[0]
-        row[f"{metric}_idx"] = values[1]
+    for k, v in data.items():
+        row[f"{k}_mtd"] = v[0]
+        row[f"{k}_idx"] = v[1]
 
     new_df = pd.DataFrame([row])
 
@@ -41,23 +45,38 @@ def load_history():
     return pd.DataFrame()
 
 
-st.title("ChefBrain")
+def show_metric(name, mtd, idx):
+    color = "green" if idx and idx > INFLATION else "red"
+    st.metric(name, f"{mtd}", f"{idx}%")
 
-uploaded_file = st.file_uploader("Загрузи PDF")
+uploaded = st.file_uploader("Загрузи PDF")
 
-if uploaded_file:
-    hotel = "TEST HOTEL"
-    metrics = {
-        "Revenue": (100000, 5),
-        "Breakfast": (20000, 3),
-        "Occupancy": (70, -2),
-        "RevPAR": (5000, 4),
-        "Kitchen": (1500, 6),
-        "Waiter": (1200, 2),
+if uploaded:
+    # временные тестовые данные
+    hotel = "PALACE BRIDGE"
+
+    data = {
+        "Revenue": (120000, 5),
+        "Breakfast": (30000, 3),
+        "Occupancy": (72, -2),
+        "RevPAR": (5400, 4),
+        "Kitchen": (1600, 6),
+        "Waiter": (1300, 2),
     }
 
-    save_history(hotel, metrics)
-    st.success("Файл обработан")
+    save_history(hotel, data)
+
+    st.subheader(f"Отель: {hotel}")
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Revenue", data["Revenue"][0], f"{data['Revenue'][1]}%")
+    col2.metric("Breakfast", data["Breakfast"][0], f"{data['Breakfast'][1]}%")
+    col3.metric("Occupancy", data["Occupancy"][0], f"{data['Occupancy'][1]}%")
+
+    col4, col5, col6 = st.columns(3)
+    col4.metric("RevPAR", data["RevPAR"][0], f"{data['RevPAR'][1]}%")
+    col5.metric("Kitchen", data["Kitchen"][0], f"{data['Kitchen'][1]}%")
+    col6.metric("Waiter", data["Waiter"][0], f"{data['Waiter'][1]}%")
 
 history = load_history()
 
@@ -67,3 +86,6 @@ if history.empty:
     st.write("Нет данных")
 else:
     st.dataframe(history)
+
+    st.subheader("Динамика Revenue")
+    st.line_chart(history.set_index("date")["Revenue_idx"])
