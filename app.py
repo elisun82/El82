@@ -200,6 +200,10 @@ st.divider()
 history = load_history()
 
 if not history.empty:
+
+    if "hotel" not in history.columns:
+        history["hotel"] = "UNKNOWN"
+
     st.subheader("История и сравнение")
     hotels = ["Все отели"] + sorted(history["hotel"].dropna().unique().tolist())
     selected_hotel = st.selectbox("Фильтр по отелю", hotels, index=0)
