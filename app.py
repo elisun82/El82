@@ -24,10 +24,54 @@ def normalize_spaces(text: str) -> str:
 def parse_number(value):
     if value is None:
         return None
-    s = str(value).replace(" ", "").replace(",", ".")
+
+    s = str(value).strip().replace("RUR", "").replace("%", "").strip()
+
+    # Если есть и точка, и запятая:
+    # считаем, что запятая = разделитель тысяч, точка = десятичная часть
+    # пример: 18,343,087  /  1.03
+    if "," in s and "." in s:
+        s = s.replace(",", "")
+        try:
+            return float(s)
+        except:
+            return None
+
+    # Если есть только запятая:
+    # различаем:
+    # 1) 24,082,425 -> тысячи
+    # 2) 87,2 -> десятичное
+    if "," in s and "." not in s:
+        parts = s.split(",")
+
+        # если после запятой 3 цифры и таких групп несколько -> это тысячи
+        if len(parts) > 1 and all(p.isdigit() for p in parts) and all(len(p) == 3 for p in parts[1:]):
+            s = "".join(parts)
+            try:
+                return float(s)
+            except:
+                return None
+
+        # иначе считаем запятую десятичным разделителем
+        s = s.replace(",", ".")
+        try:
+            return float(s)
+        except:
+            return None
+
+    # Если есть только точка:
+    # может быть 1.03 или 66.1
+    if "." in s:
+        try:
+            return float(s)
+        except:
+            return None
+
+    # Если есть пробелы в тысячах
+    s = s.replace(" ", "")
     try:
         return float(s)
-    except Exception:
+    except:
         return None
 
 def detect_hotel(text: str) -> str:
@@ -52,21 +96,13 @@ def find_line(text: str, label: str):
     match = re.search(pattern, text, flags=re.MULTILINE)
     return match.group(0) if match else None
 
-def extract_mtd_and_ly_index(line: str):
-    """
-    Формат строки в твоём отчёте:
-    [day act] [day bud] [day ly] [day bud ind] [day ly ind]
-    [mtd act] [mtd bud] [mtd ly] [mtd bud ind] [mtd ly ind]
-    ...
-
-    Нам нужно:
-    - MTD actual = 6-е число
-    - Индекс к LY = 10-е число
-    """
+def extract_mtd_and_ly_index(line):
     if not line:
         return None, None
 
-    nums = re.findall(r"\d[\d ]*(?:,\d+)?", line)
+    nums = re.findall(r"\d[\d ,]*\.?\d*", line)
+    nums = [n.strip() for n in nums if n.strip()]
+
     if len(nums) < 10:
         return None, None
 
