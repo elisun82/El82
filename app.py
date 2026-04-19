@@ -211,36 +211,59 @@ def parse_pdf(file):
         text = "\n".join(pages)
 
     hotel = detect_hotel(text)
-    upper_text = text.upper()
 
-    # Универсальные секции
-    accommodation = extract_section(upper_text, "ACCOMMODATION", "BREAKFAST") or upper_text
-    breakfast_sec = extract_section(upper_text, "BREAKFAST", "MEETING & EVENTS") \
-        or extract_section(upper_text, "BREAKFAST", "MAIN RESTAURANT") \
-        or extract_section(upper_text, "BREAKFAST", "TOTAL KITCHEN") \
-        or upper_text
+    accommodation = extract_section(text, "ACCOMMODATION", "BREAKFAST") or text
+    breakfast_sec = (
+        extract_section(text, "BREAKFAST", "MEETING & EVENTS")
+        or extract_section(text, "BREAKFAST", "MAIN RESTAURANT")
+        or extract_section(text, "BREAKFAST", "TOTAL KITCHEN")
+        or text
+    )
 
-    total_kitchen_sec = extract_section(upper_text, "TOTAL KITCHEN", "TOTAL F&B, M&E REVENUE") or upper_text
-    total_fb_sec = extract_section(upper_text, "TOTAL F&B, M&E REVENUE", "HOTEL TOTAL") or upper_text
-    hotel_total_sec = extract_section(upper_text, "HOTEL TOTAL", "MONTH YEAR") \
-        or extract_section(upper_text, "HOTEL TOTAL") \
-        or upper_text
+    total_kitchen_sec = extract_section(text, "TOTAL KITCHEN", "TOTAL F&B, M&E REVENUE") or ""
+    total_fb_sec = extract_section(text, "TOTAL F&B, M&E REVENUE", "HOTEL TOTAL") or ""
+    hotel_total_sec = (
+        extract_section(text, "HOTEL TOTAL", "Month Year")
+        or extract_section(text, "HOTEL TOTAL")
+        or ""
+    )
 
     data = {}
 
-    # HOTEL TOTAL
-    data["Revenue"] = extract_mtd_and_ly_index(find_line(hotel_total_sec, "Total revenue"))
+    # Revenue:
+    # 1) HOTEL TOTAL -> Total revenue
+    # 2) fallback: ACCOMMODATION -> Room Revenue
+    revenue_line = find_line(hotel_total_sec, "Total revenue")
+    if not revenue_line:
+        revenue_line = find_line(accommodation, "Room Revenue")
+    data["Revenue"] = extract_mtd_and_ly_index(revenue_line)
 
-    # BREAKFAST
-    data["Breakfast"] = extract_mtd_and_ly_index(find_line(breakfast_sec, "Total revenue"))
+    # Breakfast:
+    # BREAKFAST -> Total revenue
+    breakfast_line = find_line(breakfast_sec, "Total revenue")
+    data["Breakfast"] = extract_mtd_and_ly_index(breakfast_line)
 
-    # ACCOMMODATION
-    data["Occupancy"] = extract_mtd_and_ly_index(find_line(accommodation, "Occ-%"))
-    data["RevPAR"] = extract_mtd_and_ly_index(find_line(accommodation, "RevPAR"))
+    # Occupancy / RevPAR:
+    occupancy_line = find_line(accommodation, "Occ-%")
+    revpar_line = find_line(accommodation, "RevPAR")
+    data["Occupancy"] = extract_mtd_and_ly_index(occupancy_line)
+    data["RevPAR"] = extract_mtd_and_ly_index(revpar_line)
 
-    # TOTAL KITCHEN / TOTAL F&B
-    data["Kitchen"] = extract_mtd_and_ly_index(find_line(total_kitchen_sec, "Rev. / efficient hour"))
-    data["Waiter"] = extract_mtd_and_ly_index(find_line(total_fb_sec, "Rev. / wtrs. Hour"))
+    # Kitchen:
+    # 1) TOTAL KITCHEN -> Rev. / efficient hour
+    # 2) fallback: BREAKFAST -> Rev. / efficient hour
+    kitchen_line = find_line(total_kitchen_sec, "Rev. / efficient hour")
+    if not kitchen_line:
+        kitchen_line = find_line(breakfast_sec, "Rev. / efficient hour")
+    data["Kitchen"] = extract_mtd_and_ly_index(kitchen_line)
+
+    # Service:
+    # 1) TOTAL F&B -> Rev. / wtrs. Hour
+    # 2) fallback: BREAKFAST -> Rev. / wtrs. Hour
+    waiter_line = find_line(total_fb_sec, "Rev. / wtrs. Hour")
+    if not waiter_line:
+        waiter_line = find_line(breakfast_sec, "Rev. / wtrs. Hour")
+    data["Waiter"] = extract_mtd_and_ly_index(waiter_line)
 
     return hotel, data
 
