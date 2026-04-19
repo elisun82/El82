@@ -148,6 +148,7 @@ def save_history(hotel, data):
     new_df = pd.DataFrame([row])
 
     if os.path.exists(HISTORY_FILE):
+        
     df = pd.read_csv(HISTORY_FILE)
 
     if "hotel" not in df.columns:
