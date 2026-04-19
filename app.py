@@ -152,6 +152,7 @@ if os.path.exists(HISTORY_FILE):
 
     if "hotel" not in df.columns:
         df["hotel"] = "UNKNOWN"
+
     if "date" not in df.columns:
         df["date"] = ""
 
