@@ -42,37 +42,27 @@ st.markdown("""
     color: #9CA3AF;
     font-size: 14px;
 }
-.metric-card {
+.kpi-shell {
     background: linear-gradient(180deg, #111827 0%, #0B1220 100%);
     border: 1px solid rgba(255,255,255,0.06);
     border-radius: 18px;
-    padding: 18px 18px 14px 18px;
+    padding: 16px 16px 12px 16px;
+    min-height: 170px;
     box-shadow: 0 8px 24px rgba(0,0,0,0.22);
-    min-height: 150px;
 }
-.metric-title {
+.kpi-title {
     font-size: 14px;
     color: #9CA3AF;
     margin-bottom: 10px;
 }
-.metric-value {
+.kpi-value {
     font-size: 22px;
     font-weight: 700;
     color: #F9FAFB;
-    margin-bottom: 14px;
+    margin-bottom: 12px;
 }
-.metric-delta {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 15px;
-    font-weight: 700;
-    background: rgba(255,255,255,0.03);
-    border-radius: 999px;
-    padding: 6px 10px;
-}
-.metric-label {
-    margin-top: 10px;
+.kpi-label {
+    margin-top: 8px;
     font-size: 12px;
     color: #9CA3AF;
 }
@@ -339,20 +329,25 @@ def render_metric_card(title, value_str, idx):
     arrow, color, label = get_indicator(idx)
     idx_text = "нет данных" if idx is None or pd.isna(idx) else f"{idx:+.1f}%"
 
-    html = f"""
-<div class="metric-card">
-    <div class="metric-title">{title}</div>
-    <div class="metric-value">{value_str}</div>
+    with st.container():
+        st.markdown('<div class="kpi-shell">', unsafe_allow_html=True)
+        st.markdown(f'<div class="kpi-title">{title}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="kpi-value">{value_str}</div>', unsafe_allow_html=True)
 
-    <div class="metric-delta" style="color: {color};">
-        <span style="font-size: 16px;">{arrow}</span>
-        <span>{idx_text}</span>
-    </div>
+        delta_col1, delta_col2 = st.columns([1, 4])
+        with delta_col1:
+            st.markdown(
+                f"<div style='font-size:18px;font-weight:700;color:{color};'>{arrow}</div>",
+                unsafe_allow_html=True
+            )
+        with delta_col2:
+            st.markdown(
+                f"<div style='font-size:16px;font-weight:700;color:{color};'>{idx_text}</div>",
+                unsafe_allow_html=True
+            )
 
-    <div class="metric-label">{label}</div>
-</div>
-"""
-    st.markdown(html, unsafe_allow_html=True)
+        st.markdown(f'<div class="kpi-label">{label}</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
 def render_summary_block(notes):
     color_map = {
