@@ -114,24 +114,29 @@ def parse_pdf(file):
     accommodation = extract_section(text, "ACCOMMODATION 3675010", "BREAKFAST 3675014") or text
     breakfast_sec = extract_section(text, "BREAKFAST 3675014", "PB MEETING & EVENTS 3675011") or text
 
+    # Новый источник для кухни / сервиса / total revenue
+    total_fb_sec = extract_section(text, "TOTAL F&B, M&E REVENUE", "TOTAL SPA") or text
+    hotel_total_sec = extract_section(text, "HOTEL TOTAL", "3/3") or extract_section(text, "HOTEL TOTAL") or text
+
     data = {}
 
-    # Revenue = Room Revenue
-    data["Revenue"] = extract_mtd_and_ly_index(find_line(accommodation, "Room Revenue"))
+    # ИТОГО ВЫРУЧКА — теперь из HOTEL TOTAL
+    data["Revenue"] = extract_mtd_and_ly_index(find_line(hotel_total_sec, "Total revenue"))
 
-    # Breakfast = Total revenue inside BREAKFAST block
+    # Завтрак — остаётся из блока BREAKFAST
     data["Breakfast"] = extract_mtd_and_ly_index(find_line(breakfast_sec, "Total revenue"))
 
-    # Occupancy
+    # Загрузка — остаётся из ACCOMMODATION
     data["Occupancy"] = extract_mtd_and_ly_index(find_line(accommodation, "Occ-%"))
 
-    # RevPAR
+    # RevPAR — остаётся из ACCOMMODATION
     data["RevPAR"] = extract_mtd_and_ly_index(find_line(accommodation, "RevPAR"))
 
-    # Пока берём first-match по всему документу для эффективности.
-    # Если захочешь, потом сделаем именно итоговую сводку кухни/официантов.
-    data["Kitchen"] = extract_mtd_and_ly_index(find_line(text, "Rev. / ktch. hour"))
-    data["Waiter"] = extract_mtd_and_ly_index(find_line(text, "Rev. / wtrs. Hour"))
+    # КУХНЯ — теперь из TOTAL F&B, M&E REVENUE
+    data["Kitchen"] = extract_mtd_and_ly_index(find_line(total_fb_sec, "Rev. / ktch. hour"))
+
+    # СЕРВИС — теперь из TOTAL F&B, M&E REVENUE
+    data["Waiter"] = extract_mtd_and_ly_index(find_line(total_fb_sec, "Rev. / wtrs. Hour"))
 
     return hotel, data
 
