@@ -149,20 +149,33 @@ def extract_mtd_and_ly_index(line):
     if not line:
         return None, None
 
-    nums = re.findall(r"\d[\d ,]*\.?\d*", line)
-    nums = [n.strip() for n in nums if n.strip()]
+    cleaned = (
+        line.replace("RUR", "")
+            .replace("%", "")
+            .replace("\xa0", " ")
+            .strip()
+    )
 
-    if len(nums) < 10:
+    tokens = re.findall(r"\d[\d\s]*(?:[.,]\d+)?", cleaned)
+    tokens = [t.strip() for t in tokens if t.strip()]
+
+    if len(tokens) < 10:
         return None, None
 
-    mtd_actual = parse_number(nums[5])
-    ly_index_ratio = parse_number(nums[9])
+    mtd_actual = parse_number(tokens[5])
 
-    if ly_index_ratio is None:
-        ly_index_pct = None
+    idx_token = tokens[9].replace(" ", "")
+    if "," in idx_token and "." in idx_token:
+        idx_token = idx_token.replace(",", "")
     else:
-        ly_index_pct = round((ly_index_ratio - 1.0) * 100, 1)
+        idx_token = idx_token.replace(",", ".")
 
+    try:
+        ly_index_ratio = float(idx_token)
+    except Exception:
+        ly_index_ratio = None
+
+    ly_index_pct = round((ly_index_ratio - 1.0) * 100, 1) if ly_index_ratio is not None else None
     return mtd_actual, ly_index_pct
 
 def format_value(metric_name: str, value):
@@ -329,24 +342,48 @@ def render_metric_card(title, value_str, idx):
     arrow, color, label = get_indicator(idx)
     idx_text = "нет данных" if idx is None or pd.isna(idx) else f"{idx:+.1f}%"
 
+    st.markdown(
+        """
+        <style>
+        .cb-card {
+            background: linear-gradient(180deg, #111827 0%, #0B1220 100%);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 18px;
+            padding: 16px 18px 14px 18px;
+            min-height: 165px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.22);
+        }
+        .cb-title {
+            font-size: 14px;
+            color: #9CA3AF;
+            margin-bottom: 10px;
+        }
+        .cb-value {
+            font-size: 22px;
+            font-weight: 700;
+            color: #F9FAFB;
+            margin-bottom: 16px;
+        }
+        .cb-delta {
+            font-size: 18px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+        .cb-label {
+            font-size: 12px;
+            color: #9CA3AF;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
     with st.container():
-        st.markdown('<div class="kpi-shell">', unsafe_allow_html=True)
-        st.markdown(f'<div class="kpi-title">{title}</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="kpi-value">{value_str}</div>', unsafe_allow_html=True)
-
-        delta_col1, delta_col2 = st.columns([1, 4])
-        with delta_col1:
-            st.markdown(
-                f"<div style='font-size:18px;font-weight:700;color:{color};'>{arrow}</div>",
-                unsafe_allow_html=True
-            )
-        with delta_col2:
-            st.markdown(
-                f"<div style='font-size:16px;font-weight:700;color:{color};'>{idx_text}</div>",
-                unsafe_allow_html=True
-            )
-
-        st.markdown(f'<div class="kpi-label">{label}</div>', unsafe_allow_html=True)
+        st.markdown('<div class="cb-card">', unsafe_allow_html=True)
+        st.markdown(f'<div class="cb-title">{title}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="cb-value">{value_str}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="cb-delta" style="color:{color};">{arrow} {idx_text}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="cb-label">{label}</div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
 def render_summary_block(notes):
