@@ -23,7 +23,7 @@ st.markdown("""
 .block-container {
     padding-top: 1.2rem;
     padding-bottom: 2rem;
-    max-width: 1440px;
+    max-width: 1400px;
 }
 .hero-box {
     background: linear-gradient(180deg, #101828 0%, #0B1220 100%);
@@ -33,7 +33,7 @@ st.markdown("""
     margin-bottom: 18px;
 }
 .hero-title {
-    font-size: 36px;
+    font-size: 34px;
     font-weight: 800;
     color: #F9FAFB;
     margin-bottom: 6px;
@@ -42,41 +42,9 @@ st.markdown("""
     color: #9CA3AF;
     font-size: 14px;
 }
-.kpi-box {
-    background: linear-gradient(180deg, #121A2B 0%, #0B1220 100%);
-    border: 1px solid rgba(255,255,255,0.06);
-    border-radius: 16px;
-    padding: 14px 16px;
-    min-height: 112px;
-    margin-bottom: 10px;
-}
-.kpi-title {
+.small-label {
+    color: #94A3B8;
     font-size: 12px;
-    color: #94A3B8;
-    margin-bottom: 8px;
-}
-.kpi-value {
-    font-size: 24px;
-    font-weight: 800;
-    color: #F8FAFC;
-    line-height: 1.1;
-    margin-bottom: 8px;
-}
-.kpi-delta {
-    font-size: 15px;
-    font-weight: 700;
-}
-.kpi-label {
-    font-size: 11px;
-    color: #94A3B8;
-    margin-top: 6px;
-}
-.section-card {
-    background: linear-gradient(180deg, #101828 0%, #0B1220 100%);
-    border: 1px solid rgba(255,255,255,0.06);
-    border-radius: 18px;
-    padding: 16px 18px;
-    margin-bottom: 14px;
 }
 .summary-box {
     border-radius: 12px;
@@ -84,13 +52,6 @@ st.markdown("""
     margin-bottom: 10px;
     color: #F3F4F6;
     font-size: 15px;
-}
-.small-label {
-    color: #94A3B8;
-    font-size: 12px;
-}
-hr {
-    border-color: rgba(255,255,255,0.08);
 }
 </style>
 """, unsafe_allow_html=True)
@@ -107,6 +68,7 @@ def parse_number(value):
 
     s = str(value).strip().replace("RUR", "").replace("%", "").strip()
 
+    # И запятая, и точка: вероятно тысячи через запятую, дробная часть через точку
     if "," in s and "." in s:
         s = s.replace(",", "")
         try:
@@ -114,8 +76,11 @@ def parse_number(value):
         except Exception:
             return None
 
+    # Только запятая: или тысячи, или десятичный разделитель
     if "," in s and "." not in s:
         parts = s.split(",")
+
+        # 24,082,425 -> тысячи
         if len(parts) > 1 and all(p.isdigit() for p in parts) and all(len(p) == 3 for p in parts[1:]):
             s = "".join(parts)
             try:
@@ -123,18 +88,21 @@ def parse_number(value):
             except Exception:
                 return None
 
+        # 66,1 -> дробное число
         s = s.replace(",", ".")
         try:
             return float(s)
         except Exception:
             return None
 
+    # Только точка
     if "." in s:
         try:
             return float(s)
         except Exception:
             return None
 
+    # Пробелы в тысячах
     s = s.replace(" ", "")
     try:
         return float(s)
@@ -164,6 +132,13 @@ def find_line(text: str, label: str):
     return match.group(0) if match else None
 
 def extract_mtd_and_ly_index(line):
+    """
+    В отчётах структура строки обычно такая:
+    day act | day bud | day ly | bud ind | ly ind | MTD act | MTD bud | MTD ly | bud ind | ly ind | ...
+    Нам нужно:
+    - MTD actual = 6-е число
+    - индекс к LY = 10-е число
+    """
     if not line:
         return None, None
 
@@ -223,6 +198,7 @@ def parse_pdf(file):
 
     hotel = detect_hotel(text)
 
+    # Универсальные блоки
     accommodation = extract_section(text, "ACCOMMODATION 3675", "BREAKFAST 3675") or text
     breakfast_sec = extract_section(text, "BREAKFAST 3675", "MEETING & EVENTS") or text
 
@@ -231,6 +207,8 @@ def parse_pdf(file):
     hotel_total_sec = extract_section(text, "HOTEL TOTAL", "Month Year") or extract_section(text, "HOTEL TOTAL") or text
 
     data = {}
+
+    # Берём MTD и LY index
     data["Revenue"] = extract_mtd_and_ly_index(find_line(hotel_total_sec, "Total revenue"))
     data["Breakfast"] = extract_mtd_and_ly_index(find_line(breakfast_sec, "Total revenue"))
     data["Occupancy"] = extract_mtd_and_ly_index(find_line(accommodation, "Occ-%"))
@@ -302,6 +280,8 @@ def build_summary(data):
             notes.append(("Выручка растёт, но не перекрывает инфляцию 8%.", "warn"))
         else:
             notes.append(("Выручка растёт выше инфляции.", "good"))
+    else:
+        notes.append(("Нет данных по индексу общей выручки.", "warn"))
 
     if revpar_idx is not None and occupancy_idx is not None:
         if revpar_idx > occupancy_idx:
@@ -333,21 +313,16 @@ def build_summary(data):
     if waiter_idx is not None and waiter_idx < 0:
         notes.append(("Эффективность сервиса снижается.", "bad"))
 
-    if not notes:
-        notes.append(("Критичных отклонений не найдено.", "good"))
-
     return notes
 
 def get_indicator(idx):
     if idx is None or pd.isna(idx):
         return "•", "#9CA3AF", "нет данных"
-
     if idx < 0:
         return "▼", "#EF4444", "ниже LY"
-    elif idx < 8:
+    if idx < 8:
         return "▲", "#F59E0B", "ниже инфляции"
-    else:
-        return "▲", "#22C55E", "выше инфляции"
+    return "▲", "#22C55E", "выше инфляции"
 
 def get_status_name(idx):
     if idx is None or pd.isna(idx):
@@ -359,13 +334,16 @@ def get_status_name(idx):
     return "Рост"
 
 def render_summary_block(notes):
+    if not notes:
+        return
+
+    st.subheader("Вывод")
+
     color_map = {
         "good": ("#22C55E", "rgba(34,197,94,0.12)"),
         "warn": ("#F59E0B", "rgba(245,158,11,0.12)"),
         "bad":  ("#EF4444", "rgba(239,68,68,0.12)")
     }
-
-    st.subheader("Вывод")
 
     for text, level in notes:
         border, bg = color_map.get(level, ("#6B7280", "rgba(107,114,128,0.12)"))
@@ -378,25 +356,25 @@ def render_summary_block(notes):
             unsafe_allow_html=True
         )
 
-def render_kpi_tile(col, title, metric_name, value, idx):
+def show_metric(col, name, metric_key, data):
+    value, idx = data[metric_key]
     arrow, color, label = get_indicator(idx)
-    value_str = format_value(metric_name, value)
+    value_str = format_value(name, value)
     idx_str = format_idx(idx)
 
     with col:
-        st.markdown('<div class="kpi-box">', unsafe_allow_html=True)
-        st.markdown(f'<div class="kpi-title">{title}</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="kpi-value">{value_str}</div>', unsafe_allow_html=True)
+        st.markdown(f"**{name}**")
+        st.metric(label="", value=value_str, delta=None)
         st.markdown(
-            f'<div class="kpi-delta" style="color:{color};">{arrow} {idx_str}</div>',
+            f"<span style='color:{color}; font-weight:700; font-size:18px;'>{arrow} {idx_str}</span>",
             unsafe_allow_html=True
         )
-        st.markdown(f'<div class="kpi-label">{label}</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown(f"<span class='small-label'>{label}</span>", unsafe_allow_html=True)
 
 def latest_rows_by_hotel(df):
     if df.empty:
         return pd.DataFrame()
+
     return (
         df.sort_values("date")
           .groupby("hotel", as_index=False)
@@ -422,44 +400,38 @@ if uploaded_file:
 
     st.subheader(f"Отель: {hotel}")
 
-    t1, t2, t3 = st.columns(3)
-    t4, t5, t6 = st.columns(3)
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
 
-    render_kpi_tile(t1, "Revenue", "Revenue", data["Revenue"][0], data["Revenue"][1])
-    render_kpi_tile(t2, "Breakfast", "Breakfast", data["Breakfast"][0], data["Breakfast"][1])
-    render_kpi_tile(t3, "Occupancy", "Occupancy", data["Occupancy"][0], data["Occupancy"][1])
-
-    render_kpi_tile(t4, "RevPAR", "RevPAR", data["RevPAR"][0], data["RevPAR"][1])
-    render_kpi_tile(t5, "Kitchen", "Kitchen", data["Kitchen"][0], data["Kitchen"][1])
-    render_kpi_tile(t6, "Service", "Waiter", data["Waiter"][0], data["Waiter"][1])
+    show_metric(c1, "Revenue", "Revenue", data)
+    show_metric(c2, "Breakfast", "Breakfast", data)
+    show_metric(c3, "Occupancy", "Occupancy", data)
+    show_metric(c4, "RevPAR", "RevPAR", data)
+    show_metric(c5, "Kitchen", "Kitchen", data)
+    show_metric(c6, "Service", "Waiter", data)
 
     render_summary_block(build_summary(data))
 
 st.markdown("---")
 
 history = load_history()
-
 st.subheader("Сравнение отелей")
 
 if history.empty:
-    st.info("История пока пуста. Загрузи хотя бы один отчёт для каждого отеля.")
+    st.info("История пока пуста. Загрузите хотя бы по одному отчёту для каждого отеля.")
 else:
     latest = latest_rows_by_hotel(history)
 
-    if not latest.empty:
-        show_cols = [
-            "hotel",
-            "date",
-            "Revenue_idx",
-            "Breakfast_idx",
-            "Occupancy_idx",
-            "RevPAR_idx",
-            "Kitchen_idx",
-            "Waiter_idx",
+    if latest.empty:
+        st.info("Пока недостаточно данных для сравнения.")
+    else:
+        # Таблица последних значений
+        display_cols = [
+            "hotel", "date",
+            "Revenue_idx", "Breakfast_idx", "Occupancy_idx",
+            "RevPAR_idx", "Kitchen_idx", "Waiter_idx"
         ]
-        existing_cols = [c for c in show_cols if c in latest.columns]
-
-        compare_df = latest[existing_cols].copy()
+        existing_cols = [c for c in display_cols if c in latest.columns]
+        latest_display = latest[existing_cols].copy()
 
         rename_map = {
             "hotel": "Hotel",
@@ -471,57 +443,46 @@ else:
             "Kitchen_idx": "Kitchen %",
             "Waiter_idx": "Service %",
         }
-        compare_df = compare_df.rename(columns=rename_map)
+        latest_display = latest_display.rename(columns=rename_map)
 
-        st.dataframe(compare_df, use_container_width=True, hide_index=True)
+        st.dataframe(latest_display, use_container_width=True, hide_index=True)
 
-        # KPI статус по отелям
+        # Статус по отелям
         st.subheader("Статус по отелям")
-        sc1, sc2, sc3 = st.columns(3)
+        cols = st.columns(3)
+        rows = latest[["hotel", "Revenue_idx"]].sort_values("hotel").values.tolist()
 
-        hotel_cards = latest[["hotel", "Revenue_idx"]].sort_values("hotel").values.tolist()
-        slots = [sc1, sc2, sc3]
-
-        for i, item in enumerate(hotel_cards[:3]):
-            hotel_name, idx = item[0], item[1]
+        for i, row in enumerate(rows[:3]):
+            hotel_name, idx = row[0], row[1]
             arrow, color, label = get_indicator(idx)
             status_name = get_status_name(idx)
-            with slots[i]:
+
+            with cols[i]:
+                st.markdown(f"**{hotel_name}**")
+                st.metric(label="", value=status_name, delta=None)
                 st.markdown(
-                    f"""
-                    <div class="section-card">
-                        <div class="kpi-title">{hotel_name}</div>
-                        <div class="kpi-value">{status_name}</div>
-                        <div class="kpi-delta" style="color:{color};">{arrow} {format_idx(idx)}</div>
-                        <div class="kpi-label">{label}</div>
-                    </div>
-                    """,
+                    f"<span style='color:{color}; font-weight:700; font-size:18px;'>{arrow} {format_idx(idx)}</span>",
                     unsafe_allow_html=True
                 )
+                st.markdown(f"<span class='small-label'>{label}</span>", unsafe_allow_html=True)
 
-        # График сравнения Revenue
+        # График Revenue по отелям
         st.subheader("Revenue: сравнение отелей")
         if {"date", "hotel", "Revenue_idx"}.issubset(history.columns):
-            revenue_pivot = history.pivot_table(
-                index="date",
-                columns="hotel",
-                values="Revenue_idx",
-                aggfunc="last"
-            )
-            if not revenue_pivot.empty:
-                st.line_chart(revenue_pivot)
+            pivot = history.pivot_table(index="date", columns="hotel", values="Revenue_idx", aggfunc="last")
+            if pivot.shape[1] > 0:
+                st.line_chart(pivot)
+            else:
+                st.info("Пока недостаточно данных для графика Revenue.")
 
-        # График сравнения RevPAR
+        # График RevPAR по отелям
         st.subheader("RevPAR: сравнение отелей")
         if {"date", "hotel", "RevPAR_idx"}.issubset(history.columns):
-            revpar_pivot = history.pivot_table(
-                index="date",
-                columns="hotel",
-                values="RevPAR_idx",
-                aggfunc="last"
-            )
-            if not revpar_pivot.empty:
-                st.line_chart(revpar_pivot)
+            pivot = history.pivot_table(index="date", columns="hotel", values="RevPAR_idx", aggfunc="last")
+            if pivot.shape[1] > 0:
+                st.line_chart(pivot)
+            else:
+                st.info("Пока недостаточно данных для графика RevPAR.")
 
 st.markdown("---")
 
@@ -545,8 +506,9 @@ else:
         st.subheader("Динамика Revenue")
         if "Revenue_idx" in filtered.columns:
             if hotel_filter == "Все отели":
-                revenue_pivot = filtered.pivot_table(index="date", columns="hotel", values="Revenue_idx", aggfunc="last")
-                st.line_chart(revenue_pivot)
+                pivot = filtered.pivot_table(index="date", columns="hotel", values="Revenue_idx", aggfunc="last")
+                if pivot.shape[1] > 0:
+                    st.line_chart(pivot)
             else:
                 st.line_chart(filtered.set_index("date")["Revenue_idx"])
 
@@ -556,6 +518,7 @@ else:
             if hotel_filter == "Все отели":
                 metric = st.selectbox("Показатель для сравнения", cols_to_show, index=0)
                 pivot = filtered.pivot_table(index="date", columns="hotel", values=metric, aggfunc="last")
-                st.line_chart(pivot)
+                if pivot.shape[1] > 0:
+                    st.line_chart(pivot)
             else:
                 st.line_chart(filtered.set_index("date")[cols_to_show])
