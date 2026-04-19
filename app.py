@@ -266,14 +266,12 @@ if uploaded_file:
     st.subheader(f"Отель: {hotel}")
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("Revenue", format_value("Revenue", data["Revenue"][0]), f"{status_icon(data['Revenue'][1])} {data['Revenue'][1]}%")
-    c2.metric("Breakfast", format_value("Breakfast", data["Breakfast"][0]), f"{status_icon(data['Breakfast'][1])} {data['Breakfast'][1]}%")
-    c3.metric("Occupancy", format_value("Occupancy", data["Occupancy"][0]), f"{status_icon(data['Occupancy'][1])} {data['Occupancy'][1]}%")
-
-    c4, c5, c6 = st.columns(3)
-    c4.metric("RevPAR", format_value("RevPAR", data["RevPAR"][0]), f"{status_icon(data['RevPAR'][1])} {data['RevPAR'][1]}%")
-    c5.metric("Kitchen", format_value("Kitchen", data["Kitchen"][0]), f"{status_icon(data['Kitchen'][1])} {data['Kitchen'][1]}%")
-    c6.metric("Waiter", format_value("Waiter", data["Waiter"][0]), f"{status_icon(data['Waiter'][1])} {data['Waiter'][1]}%")
+    c1.metric("Revenue", format_value("Revenue", data["Revenue"][0]), f"{data['Revenue'][1]}%", delta_color="off")
+c2.metric("Breakfast", format_value("Breakfast", data["Breakfast"][0]), f"{data['Breakfast'][1]}%", delta_color="off")
+c3.metric("Occupancy", format_value("Occupancy", data["Occupancy"][0]), f"{data['Occupancy'][1]}%", delta_color="off")
+c4.metric("RevPAR", format_value("RevPAR", data["RevPAR"][0]), f"{data['RevPAR'][1]}%", delta_color="off")
+c5.metric("Kitchen", format_value("Kitchen", data["Kitchen"][0]), f"{data['Kitchen'][1]}%", delta_color="off")
+c6.metric("Service", format_value("Waiter", data["Waiter"][0]), f"{data['Waiter'][1]}%", delta_color="off")
 
     st.subheader("Вывод")
     for note in build_summary(data):
