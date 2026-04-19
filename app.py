@@ -149,20 +149,20 @@ def save_history(hotel, data):
     new_df = pd.DataFrame([row])
 
     if os.path.exists(HISTORY_FILE):
-        df = pd.read_csv(HISTORY_FILE)
+    df = pd.read_csv(HISTORY_FILE)
 
-        if "hotel" not in df.columns:
-            df["hotel"] = "UNKNOWN"
+    if "hotel" not in df.columns:
+        df["hotel"] = "UNKNOWN"
 
-        if "date" not in df.columns:
-            df["date"] = ""
+    if "date" not in df.columns:
+        df["date"] = ""
 
-        df = df[~((df["date"] == today) & (df["hotel"] == hotel))]
-        df = pd.concat([df, new_df], ignore_index=True)
-    else:
-        df = new_df
+    df = df[~((df["date"] == today) & (df["hotel"] == hotel))]
+    df = pd.concat([df, new_df], ignore_index=True)
+else:
+    df = new_df
 
-    df.to_csv(HISTORY_FILE, index=False)
+df.to_csv(HISTORY_FILE, index=False)
 def load_history():
     if os.path.exists(HISTORY_FILE):
         return pd.read_csv(HISTORY_FILE)
