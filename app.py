@@ -42,27 +42,31 @@ st.markdown("""
     color: #9CA3AF;
     font-size: 14px;
 }
-.kpi-shell {
+.metric-wrap {
     background: linear-gradient(180deg, #111827 0%, #0B1220 100%);
     border: 1px solid rgba(255,255,255,0.06);
     border-radius: 18px;
-    padding: 16px 16px 12px 16px;
-    min-height: 170px;
+    padding: 16px 16px 14px 16px;
+    min-height: 150px;
     box-shadow: 0 8px 24px rgba(0,0,0,0.22);
 }
-.kpi-title {
+.metric-title {
     font-size: 14px;
     color: #9CA3AF;
-    margin-bottom: 10px;
+    margin-bottom: 12px;
 }
-.kpi-value {
+.metric-value {
     font-size: 22px;
     font-weight: 700;
     color: #F9FAFB;
-    margin-bottom: 12px;
+    margin-bottom: 10px;
 }
-.kpi-label {
-    margin-top: 8px;
+.metric-delta {
+    font-size: 18px;
+    font-weight: 700;
+    margin-bottom: 6px;
+}
+.metric-label {
     font-size: 12px;
     color: #9CA3AF;
 }
@@ -88,39 +92,45 @@ def parse_number(value):
 
     s = str(value).strip().replace("RUR", "").replace("%", "").strip()
 
+    # Есть и запятая, и точка: вероятнее всего запятые = тысячи, точка = десятичная часть
     if "," in s and "." in s:
         s = s.replace(",", "")
         try:
             return float(s)
-        except:
+        except Exception:
             return None
 
+    # Есть только запятая: или тысячи, или десятичный разделитель
     if "," in s and "." not in s:
         parts = s.split(",")
 
+        # 24,082,425 -> тысячи
         if len(parts) > 1 and all(p.isdigit() for p in parts) and all(len(p) == 3 for p in parts[1:]):
             s = "".join(parts)
             try:
                 return float(s)
-            except:
+            except Exception:
                 return None
 
+        # 66,1 -> десятичное число
         s = s.replace(",", ".")
         try:
             return float(s)
-        except:
+        except Exception:
             return None
 
+    # Есть только точка
     if "." in s:
         try:
             return float(s)
-        except:
+        except Exception:
             return None
 
+    # Пробелы как разделители тысяч
     s = s.replace(" ", "")
     try:
         return float(s)
-    except:
+    except Exception:
         return None
 
 def detect_hotel(text: str) -> str:
@@ -156,15 +166,19 @@ def extract_mtd_and_ly_index(line):
             .strip()
     )
 
-    tokens = re.findall(r"\d[\d\s]*(?:[.,]\d+)?", cleaned)
+    tokens = re.findall(r"\d[\d\s,]*(?:[.,]\d+)?", cleaned)
     tokens = [t.strip() for t in tokens if t.strip()]
 
     if len(tokens) < 10:
         return None, None
 
+    # MTD actual = 6-е число
     mtd_actual = parse_number(tokens[5])
 
+    # Индекс к LY = 10-е число
     idx_token = tokens[9].replace(" ", "")
+
+    # 1,07 / 1.03 / 0,92 / 0.97
     if "," in idx_token and "." in idx_token:
         idx_token = idx_token.replace(",", "")
     else:
@@ -200,7 +214,7 @@ def parse_pdf(file):
 
     hotel = detect_hotel(text)
 
-    # Универсальнее, чем по точным ID
+    # Универсальные блоки для разных отелей
     accommodation = extract_section(text, "ACCOMMODATION 3675", "BREAKFAST 3675") or text
     breakfast_sec = extract_section(text, "BREAKFAST 3675", "MEETING & EVENTS") or text
 
@@ -210,7 +224,7 @@ def parse_pdf(file):
 
     data = {}
 
-    # Выручка отеля
+    # Итого выручка отеля
     data["Revenue"] = extract_mtd_and_ly_index(find_line(hotel_total_sec, "Total revenue"))
 
     # Завтрак
@@ -222,7 +236,7 @@ def parse_pdf(file):
     # RevPAR
     data["RevPAR"] = extract_mtd_and_ly_index(find_line(accommodation, "RevPAR"))
 
-    # Кухня и сервис из итоговых блоков
+    # Кухня и сервис
     data["Kitchen"] = extract_mtd_and_ly_index(find_line(total_kitchen_sec, "Rev. / efficient hour"))
     data["Waiter"] = extract_mtd_and_ly_index(find_line(total_fb_sec, "Rev. / wtrs. Hour"))
 
@@ -253,6 +267,7 @@ def save_history(hotel, data):
             if col not in df.columns:
                 df[col] = pd.NA
 
+        # Обновляем запись за этот день и отель
         df = df[~((df["date"] == today) & (df["hotel"] == hotel))]
         df = pd.concat([df, new_df], ignore_index=True)
     else:
@@ -338,52 +353,20 @@ def get_indicator(idx):
     else:
         return "▲", "#22C55E", "выше инфляции"
 
-def render_metric_card(title, value_str, idx):
+def show_metric(col, name, value, idx):
     arrow, color, label = get_indicator(idx)
-    idx_text = "нет данных" if idx is None or pd.isna(idx) else f"{idx:+.1f}%"
+    value_str = format_value(name, value)
+    idx_str = "нет данных" if idx is None or pd.isna(idx) else f"{idx:+.1f}%"
 
-    st.markdown(
-        """
-        <style>
-        .cb-card {
-            background: linear-gradient(180deg, #111827 0%, #0B1220 100%);
-            border: 1px solid rgba(255,255,255,0.06);
-            border-radius: 18px;
-            padding: 16px 18px 14px 18px;
-            min-height: 165px;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.22);
-        }
-        .cb-title {
-            font-size: 14px;
-            color: #9CA3AF;
-            margin-bottom: 10px;
-        }
-        .cb-value {
-            font-size: 22px;
-            font-weight: 700;
-            color: #F9FAFB;
-            margin-bottom: 16px;
-        }
-        .cb-delta {
-            font-size: 18px;
-            font-weight: 700;
-            margin-bottom: 8px;
-        }
-        .cb-label {
-            font-size: 12px;
-            color: #9CA3AF;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True
-    )
-
-    with st.container():
-        st.markdown('<div class="cb-card">', unsafe_allow_html=True)
-        st.markdown(f'<div class="cb-title">{title}</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="cb-value">{value_str}</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="cb-delta" style="color:{color};">{arrow} {idx_text}</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="cb-label">{label}</div>', unsafe_allow_html=True)
+    with col:
+        st.markdown('<div class="metric-wrap">', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-title">{name}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-value">{value_str}</div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="metric-delta" style="color:{color};">{arrow} {idx_str}</div>',
+            unsafe_allow_html=True
+        )
+        st.markdown(f'<div class="metric-label">{label}</div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
 def render_summary_block(notes):
@@ -425,20 +408,15 @@ if uploaded_file:
     st.subheader(f"Отель: {hotel}")
 
     c1, c2, c3 = st.columns(3)
-    with c1:
-        render_metric_card("Revenue", format_value("Revenue", data["Revenue"][0]), data["Revenue"][1])
-    with c2:
-        render_metric_card("Breakfast", format_value("Breakfast", data["Breakfast"][0]), data["Breakfast"][1])
-    with c3:
-        render_metric_card("Occupancy", format_value("Occupancy", data["Occupancy"][0]), data["Occupancy"][1])
-
     c4, c5, c6 = st.columns(3)
-    with c4:
-        render_metric_card("RevPAR", format_value("RevPAR", data["RevPAR"][0]), data["RevPAR"][1])
-    with c5:
-        render_metric_card("Kitchen", format_value("Kitchen", data["Kitchen"][0]), data["Kitchen"][1])
-    with c6:
-        render_metric_card("Service", format_value("Waiter", data["Waiter"][0]), data["Waiter"][1])
+
+    show_metric(c1, "Revenue", data["Revenue"][0], data["Revenue"][1])
+    show_metric(c2, "Breakfast", data["Breakfast"][0], data["Breakfast"][1])
+    show_metric(c3, "Occupancy", data["Occupancy"][0], data["Occupancy"][1])
+
+    show_metric(c4, "RevPAR", data["RevPAR"][0], data["RevPAR"][1])
+    show_metric(c5, "Kitchen", data["Kitchen"][0], data["Kitchen"][1])
+    show_metric(c6, "Service", data["Waiter"][0], data["Waiter"][1])
 
     render_summary_block(build_summary(data))
 
