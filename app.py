@@ -1,10 +1,12 @@
+
 import os
 from datetime import datetime
+from typing import Dict, Tuple, Optional
 
 import pandas as pd
 import streamlit as st
 
-HISTORY_FILE = "history_hotels.xlsx.csv"
+HISTORY_FILE = "history_hotels.csv"
 INFLATION = 8.0
 HOTELS = ["PALACE BRIDGE", "OLYMPIA GARDEN", "VASILIEVSKY"]
 
@@ -45,6 +47,9 @@ st.markdown("""
     color: #F3F4F6;
     font-size: 15px;
 }
+.section-title {
+    margin-top: 8px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -70,23 +75,26 @@ def detect_hotel(df: pd.DataFrame, filename: str) -> str:
     return "UNKNOWN"
 
 
-def format_value(metric_name: str, value):
+def format_value(metric_name: str, value: Optional[float]) -> str:
     if value is None or pd.isna(value):
         return "нет данных"
 
     if metric_name == "Occupancy":
-        return f"{value * 100:.1f}%" if value <= 1.2 else f"{value:.1f}%"
+        # В файлах occupancy хранится долей, например 0.46
+        if value <= 1.5:
+            return f"{value * 100:.1f}%"
+        return f"{value:.1f}%"
 
     return f"{value:,.0f}".replace(",", " ")
 
 
-def format_idx(idx):
+def format_idx(idx: Optional[float]) -> str:
     if idx is None or pd.isna(idx):
         return "нет данных"
     return f"{idx:+.1f}%"
 
 
-def get_indicator(idx):
+def get_indicator(idx: Optional[float]) -> Tuple[str, str, str]:
     if idx is None or pd.isna(idx):
         return "•", "#94A3B8", "нет данных"
     if idx < 0:
@@ -96,7 +104,17 @@ def get_indicator(idx):
     return "▲", "#22C55E", "выше инфляции"
 
 
-def find_row_index(df: pd.DataFrame, text: str, start_idx: int = 0):
+def get_status_name(idx: Optional[float]) -> str:
+    if idx is None or pd.isna(idx):
+        return "Нет данных"
+    if idx < 0:
+        return "Критично"
+    if idx < INFLATION:
+        return "Риск"
+    return "Рост"
+
+
+def find_row_index(df: pd.DataFrame, text: str, start_idx: int = 0) -> Optional[int]:
     for i in range(start_idx, len(df)):
         cell = str(df.iloc[i, 0]).strip().upper()
         if cell == text.upper():
@@ -104,37 +122,35 @@ def find_row_index(df: pd.DataFrame, text: str, start_idx: int = 0):
     return None
 
 
-def first_row_between(df: pd.DataFrame, start_idx: int, end_idx: int, target: str):
+def first_row_between(df: pd.DataFrame, start_idx: Optional[int], end_idx: Optional[int], target: str) -> Optional[int]:
     if start_idx is None:
         return None
-    if end_idx is None:
-        end_idx = len(df)
+    end = len(df) if end_idx is None else end_idx
 
-    for i in range(start_idx, end_idx):
+    for i in range(start_idx, end):
         cell = str(df.iloc[i, 0]).strip().upper()
         if cell == target.upper():
             return i
     return None
 
 
-def first_contains_between(df: pd.DataFrame, start_idx: int, end_idx: int, target: str):
+def first_contains_between(df: pd.DataFrame, start_idx: Optional[int], end_idx: Optional[int], target: str) -> Optional[int]:
     if start_idx is None:
         return None
-    if end_idx is None:
-        end_idx = len(df)
-
+    end = len(df) if end_idx is None else end_idx
     t = target.upper()
-    for i in range(start_idx, end_idx):
+
+    for i in range(start_idx, end):
         cell = str(df.iloc[i, 0]).strip().upper()
         if t in cell:
             return i
     return None
 
 
-def row_to_metric(df: pd.DataFrame, row_idx: int):
+def row_to_metric(df: pd.DataFrame, row_idx: Optional[int]) -> Tuple[Optional[float], Optional[float]]:
     """
-    Логика листа Manager view:
-    - col 9  = MTD actual
+    Manager view structure:
+    - col 9  = MTD actual (Accum.)
     - col 14 = LY index ratio
     """
     if row_idx is None:
@@ -146,6 +162,7 @@ def row_to_metric(df: pd.DataFrame, row_idx: int):
     idx_ratio = row[14] if 14 in row.index else None
 
     value = None if pd.isna(value) else float(value)
+
     if pd.isna(idx_ratio):
         idx = None
     else:
@@ -157,7 +174,7 @@ def row_to_metric(df: pd.DataFrame, row_idx: int):
 # =========================
 # EXCEL PARSER
 # =========================
-def parse_excel(file):
+def parse_excel(file) -> Tuple[str, Dict[str, Tuple[Optional[float], Optional[float]]]]:
     df = pd.read_excel(file, sheet_name="Manager view", header=None)
     hotel = detect_hotel(df, file.name)
 
@@ -206,7 +223,7 @@ def parse_excel(file):
 # =========================
 # HISTORY
 # =========================
-def save_history(hotel, data):
+def save_history(hotel: str, data: Dict[str, Tuple[Optional[float], Optional[float]]]) -> None:
     today = datetime.now().strftime("%Y-%m-%d")
 
     row = {"date": today, "hotel": hotel}
@@ -236,28 +253,28 @@ def save_history(hotel, data):
     df.to_csv(HISTORY_FILE, index=False)
 
 
-def load_history():
+def load_history() -> pd.DataFrame:
     if os.path.exists(HISTORY_FILE):
         return pd.read_csv(HISTORY_FILE)
     return pd.DataFrame()
 
 
-def latest_rows_by_hotel(df: pd.DataFrame):
+def latest_rows_by_hotel(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame()
 
     return (
         df.sort_values("date")
-          .groupby("hotel", as_index=False)
-          .tail(1)
-          .sort_values("hotel")
+        .groupby("hotel", as_index=False)
+        .tail(1)
+        .sort_values("hotel")
     )
 
 
 # =========================
 # ANALYTICS
 # =========================
-def build_summary(data):
+def build_summary(data: Dict[str, Tuple[Optional[float], Optional[float]]]):
     notes = []
 
     revenue_idx = data["Revenue"][1]
@@ -271,7 +288,7 @@ def build_summary(data):
         if revenue_idx < 0:
             notes.append(("Выручка ниже прошлого года.", "bad"))
         elif revenue_idx < INFLATION:
-            notes.append(("Выручка растёт, но не перекрывает инфляцию 8%.", "warn"))
+            notes.append((f"Выручка растёт, но не перекрывает инфляцию {INFLATION:.0f}%.", "warn"))
         else:
             notes.append(("Выручка растёт выше инфляции.", "good"))
     else:
@@ -310,7 +327,7 @@ def build_summary(data):
     return notes
 
 
-def render_summary_block(notes):
+def render_summary_block(notes) -> None:
     if not notes:
         return
 
@@ -334,7 +351,7 @@ def render_summary_block(notes):
         )
 
 
-def show_metric(col, title, key, data):
+def show_metric(col, title: str, key: str, data: Dict[str, Tuple[Optional[float], Optional[float]]]) -> None:
     value, idx = data.get(key, (None, None))
     arrow, color, label = get_indicator(idx)
 
@@ -361,10 +378,10 @@ st.markdown("""
 files = st.file_uploader(
     "Загрузи 1 или несколько Excel файлов",
     type=["xlsx"],
-    accept_multiple_files=True
+    accept_multiple_files=True,
 )
 
-current_uploads = {}
+current_uploads: Dict[str, Dict[str, Tuple[Optional[float], Optional[float]]]] = {}
 
 if files:
     for file in files:
