@@ -9,11 +9,11 @@ import streamlit as st
 # =====================
 # SETTINGS
 # =====================
-HISTORY_FILE = "history_olympia.csv"
+HISTORY_FILE = "history_vasilievsky.csv"
 INFLATION = 8.0
-HOTEL_NAME = "OLYMPIA GARDEN"
+HOTEL_NAME = "VASILIEVSKY"
 
-st.set_page_config(page_title="ChefBrain — OLYMPIA GARDEN", layout="wide")
+st.set_page_config(page_title="ChefBrain — VASILIEVSKY", layout="wide")
 
 # =====================
 # STYLES
@@ -83,14 +83,14 @@ def parse_number(value):
     if "," in s and "." not in s:
         parts = s.split(",")
 
-        # thousands format: 20,339,025
+        # thousands format: 23,952,188
         if len(parts) > 1 and all(p.isdigit() for p in parts) and all(len(p) == 3 for p in parts[1:]):
             try:
                 return float("".join(parts))
             except Exception:
                 return None
 
-        # decimal comma: 66,5 / 1,04
+        # decimal comma: 67,5 / 1,04
         try:
             return float(s.replace(",", "."))
         except Exception:
@@ -121,6 +121,10 @@ def parse_metric_line(line: str):
     Формат строки:
     day act / day bud / day ly / day bud idx / day ly idx /
     mtd act / mtd bud / mtd ly / mtd bud idx / mtd ly idx / ...
+
+    Берём:
+    - index 5 -> MTD actual
+    - index 9 -> MTD LY index
     """
     if not line:
         return None, None
@@ -202,23 +206,28 @@ def find_first_line(lines, includes=None, startswith=None):
         return line
     return None
 
-def find_last_line(lines, includes=None, startswith=None):
+def find_nth_from_end(lines, includes=None, startswith=None, n=1):
     includes = [x.lower() for x in (includes or [])]
     startswith = startswith.lower() if startswith else None
 
-    for line in reversed(lines):
+    matches = []
+    for line in lines:
         low = line.lower()
         if startswith and not low.startswith(startswith):
             continue
         if includes and not all(x in low for x in includes):
             continue
-        return line
-    return None
+        matches.append(line)
+
+    if len(matches) < n:
+        return None
+
+    return matches[-n]
 
 # =====================
-# OLYMPIA PARSER
+# VASILIEVSKY PARSER
 # =====================
-def parse_olympia_pdf(file):
+def parse_vasilievsky_pdf(file):
     with pdfplumber.open(file) as pdf:
         pages = []
         for page in pdf.pages:
@@ -229,29 +238,27 @@ def parse_olympia_pdf(file):
     all_lines = split_lines(text)
 
     accommodation_lines = get_section_lines(text, ["accommodation"], ["breakfast"])
-    breakfast_lines = get_section_lines(text, ["breakfast"], ["og - meeting", "events"])
+    breakfast_lines = get_section_lines(text, ["breakfast"], ["vs pub"])
     if not breakfast_lines:
-        breakfast_lines = get_section_lines(text, ["breakfast"], ["og - main restaurant"])
+        breakfast_lines = get_section_lines(text, ["breakfast"], ["vs main restaurant"])
     if not breakfast_lines:
         breakfast_lines = get_section_lines(text, ["breakfast"], ["total kitchen"])
 
-    total_kitchen_lines = get_section_lines(text, ["total kitchen"], ["total f&b", "m&e revenue"])
-    total_fb_lines = get_section_lines(text, ["total f&b", "m&e revenue"], ["hotel total"])
+    # Revenue = HOTEL TOTAL -> last "Total revenue"
+    revenue_line = find_nth_from_end(all_lines, startswith="total revenue", n=1)
 
-    revenue_line = find_first_line(accommodation_lines, startswith="room revenue")
+    # Breakfast = BREAKFAST -> first "Total revenue"
     breakfast_line = find_first_line(breakfast_lines, startswith="total revenue")
+
+    # Occupancy / RevPAR = ACCOMMODATION
     occupancy_line = find_first_line(accommodation_lines, startswith="occ-%")
     revpar_line = find_first_line(accommodation_lines, startswith="revpar")
 
-    kitchen_line = find_first_line(total_kitchen_lines, includes=["rev.", "efficient hour"])
-    if not kitchen_line:
-        kitchen_line = find_last_line(all_lines, includes=["rev.", "efficient hour"])
+    # Kitchen = TOTAL KITCHEN -> third line from end "Rev. / efficient hour"
+    kitchen_line = find_nth_from_end(all_lines, includes=["rev.", "efficient hour"], n=3)
 
-    waiter_line = find_first_line(total_fb_lines, includes=["rev.", "wtrs. hour"])
-    if not waiter_line:
-        waiter_line = find_first_line(breakfast_lines, includes=["rev.", "wtrs. hour"])
-    if not waiter_line:
-        waiter_line = find_last_line(all_lines, includes=["rev.", "wtrs. hour"])
+    # Service = TOTAL F&B, M&E REVENUE -> last line "Rev. / wtrs. Hour"
+    waiter_line = find_nth_from_end(all_lines, includes=["rev.", "wtrs. hour"], n=1)
 
     data = {
         "Revenue": parse_metric_line(revenue_line),
@@ -387,15 +394,15 @@ def show_metric(col, name, metric_key, data):
 # =====================
 st.markdown("""
 <div class="hero-box">
-    <div class="hero-title">ChefBrain — OLYMPIA GARDEN</div>
-    <div class="hero-subtitle">Чистая рабочая версия под Olympia Garden.</div>
+    <div class="hero-title">ChefBrain — VASILIEVSKY</div>
+    <div class="hero-subtitle">Чистая рабочая версия под Vasilievsky.</div>
 </div>
 """, unsafe_allow_html=True)
 
-uploaded_file = st.file_uploader("Загрузи PDF OLYMPIA GARDEN", type=["pdf"])
+uploaded_file = st.file_uploader("Загрузи PDF VASILIEVSKY", type=["pdf"])
 
 if uploaded_file:
-    hotel, data = parse_olympia_pdf(uploaded_file)
+    hotel, data = parse_vasilievsky_pdf(uploaded_file)
     save_history(hotel, data)
 
     st.subheader(f"Отель: {hotel}")
@@ -411,7 +418,7 @@ if uploaded_file:
     render_summary_block(build_summary(data))
 
 st.markdown("---")
-st.subheader("История Olympia Garden")
+st.subheader("История Vasilievsky")
 
 history = load_history()
 if history.empty:
