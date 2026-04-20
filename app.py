@@ -58,6 +58,31 @@ st.markdown("""
 # =====================
 # HELPERS
 # =====================
+def extract_report_date(text: str) -> str:
+    """
+    Ищет дату в левом верхнем углу документа.
+    Поддерживает форматы:
+    - 18.04.2026
+    - 4/20/2026
+    Возвращает дату в формате YYYY-MM-DD
+    """
+    lines = split_lines(text)
+    header_text = " ".join(lines[:5])  # первые строки документа
+
+    # dd.mm.yyyy
+    m = re.search(r"\b(\d{2})\.(\d{2})\.(\d{4})\b", header_text)
+    if m:
+        day, month, year = m.groups()
+        return f"{year}-{month}-{day}"
+
+    # m/d/yyyy или mm/dd/yyyy
+    m = re.search(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b", header_text)
+    if m:
+        month, day, year = m.groups()
+        return f"{year}-{int(month):02d}-{int(day):02d}"
+
+    # fallback: сегодняшняя дата
+    return datetime.now().strftime("%Y-%m-%d")
 NUM_PATTERN = re.compile(
     r"\d{1,3}(?:[ \u00A0]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?"
 )
@@ -352,6 +377,7 @@ def parse_uploaded_pdf(file):
         text = "\n".join(pages)
 
     hotel = detect_hotel(text)
+    report_date = extract_report_date(text)
 
     if hotel == "PALACE BRIDGE":
         data = parse_palace(text)
@@ -369,18 +395,16 @@ def parse_uploaded_pdf(file):
             "Waiter": (None, None),
         }
 
-    return hotel, data
+    return hotel, report_date, data
 
 # =====================
 # HISTORY
 # =====================
-def save_history(hotel, data):
+def save_history(hotel, report_date, data):
     if hotel == "UNKNOWN":
         return
 
-    today = datetime.now().strftime("%Y-%m-%d")
-
-    row = {"date": today, "hotel": hotel}
+    row = {"date": report_date, "hotel": hotel}
     for metric, values in data.items():
         row[f"{metric}_mtd"] = values[0]
         row[f"{metric}_idx"] = values[1]
@@ -393,17 +417,12 @@ def save_history(hotel, data):
             if col not in df.columns:
                 df[col] = pd.NA
 
-        df = df[~((df["date"] == today) & (df["hotel"] == hotel))]
+        df = df[~((df["date"] == report_date) & (df["hotel"] == hotel))]
         df = pd.concat([df, new_df], ignore_index=True)
     else:
         df = new_df
 
     df.to_csv(HISTORY_FILE, index=False)
-
-def load_history():
-    if os.path.exists(HISTORY_FILE):
-        return pd.read_csv(HISTORY_FILE)
-    return pd.DataFrame()
 
 def latest_rows_by_hotel(df):
     if df.empty:
@@ -516,17 +535,18 @@ st.markdown("""
 uploaded_file = st.file_uploader("Загрузи PDF отчёт", type=["pdf"])
 
 if uploaded_file:
-    hotel, data = parse_uploaded_pdf(uploaded_file)
+    hotel, report_date, data = parse_uploaded_pdf(uploaded_file)
 
-    if hotel == "UNKNOWN":
-        st.error("Не удалось определить отель по файлу.")
-    else:
-        save_history(hotel, data)
+if hotel == "UNKNOWN":
+    st.error("Не удалось определить отель по файлу.")
+else:
+    save_history(hotel, report_date, data)
 
-        st.subheader(f"Отель: {hotel}")
+    st.subheader(f"Отель: {hotel}")
+    st.caption(f"Дата отчёта: {report_date}")
 
         c1, c2, c3, c4, c5, c6 = st.columns(6)
-        show_metric(c1, "Revenue", "Revenue", data)
+        show_metric(c1, "Total revenue", "Revenue", data)
         show_metric(c2, "Breakfast", "Breakfast", data)
         show_metric(c3, "Occupancy", "Occupancy", data)
         show_metric(c4, "RevPAR", "RevPAR", data)
@@ -559,7 +579,7 @@ else:
         rename_map = {
             "hotel": "Hotel",
             "date": "Date",
-            "Revenue_idx": "Revenue %",
+            "Revenue_idx": "Total revenue %",
             "Breakfast_idx": "Breakfast %",
             "Occupancy_idx": "Occupancy %",
             "RevPAR_idx": "RevPAR %",
