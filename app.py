@@ -9,11 +9,11 @@ import streamlit as st
 # =====================
 # SETTINGS
 # =====================
-HISTORY_FILE = "history_palace.csv"
+HISTORY_FILE = "history_olympia.csv"
 INFLATION = 8.0
-HOTEL_NAME = "PALACE BRIDGE"
+HOTEL_NAME = "OLYMPIA GARDEN"
 
-st.set_page_config(page_title="ChefBrain — PALACE BRIDGE", layout="wide")
+st.set_page_config(page_title="ChefBrain — OLYMPIA GARDEN", layout="wide")
 
 # =====================
 # STYLES
@@ -83,12 +83,14 @@ def parse_number(value):
     if "," in s and "." not in s:
         parts = s.split(",")
 
+        # thousands format: 20,339,025
         if len(parts) > 1 and all(p.isdigit() for p in parts) and all(len(p) == 3 for p in parts[1:]):
             try:
                 return float("".join(parts))
             except Exception:
                 return None
 
+        # decimal comma: 66,5 / 1,04
         try:
             return float(s.replace(",", "."))
         except Exception:
@@ -115,6 +117,11 @@ def extract_tokens(line: str):
     return [m.group(0).strip() for m in NUM_PATTERN.finditer(cleaned)]
 
 def parse_metric_line(line: str):
+    """
+    Формат строки:
+    day act / day bud / day ly / day bud idx / day ly idx /
+    mtd act / mtd bud / mtd ly / mtd bud idx / mtd ly idx / ...
+    """
     if not line:
         return None, None
 
@@ -122,9 +129,6 @@ def parse_metric_line(line: str):
     if len(tokens) < 10:
         return None, None
 
-    # Формат:
-    # day act / day bud / day ly / day bud idx / day ly idx /
-    # mtd act / mtd bud / mtd ly / mtd bud idx / mtd ly idx
     mtd_value = parse_number(tokens[5])
 
     idx_raw = tokens[9].replace(" ", "")
@@ -212,9 +216,9 @@ def find_last_line(lines, includes=None, startswith=None):
     return None
 
 # =====================
-# PALACE PARSER
+# OLYMPIA PARSER
 # =====================
-def parse_palace_pdf(file):
+def parse_olympia_pdf(file):
     with pdfplumber.open(file) as pdf:
         pages = []
         for page in pdf.pages:
@@ -225,12 +229,14 @@ def parse_palace_pdf(file):
     all_lines = split_lines(text)
 
     accommodation_lines = get_section_lines(text, ["accommodation"], ["breakfast"])
-    breakfast_lines = get_section_lines(text, ["breakfast"], ["meeting", "events"])
+    breakfast_lines = get_section_lines(text, ["breakfast"], ["og - meeting", "events"])
+    if not breakfast_lines:
+        breakfast_lines = get_section_lines(text, ["breakfast"], ["og - main restaurant"])
     if not breakfast_lines:
         breakfast_lines = get_section_lines(text, ["breakfast"], ["total kitchen"])
 
     total_kitchen_lines = get_section_lines(text, ["total kitchen"], ["total f&b", "m&e revenue"])
-    total_fb_lines = get_section_lines(text, ["total f&b", "m&e revenue"], ["total spa"])
+    total_fb_lines = get_section_lines(text, ["total f&b", "m&e revenue"], ["hotel total"])
 
     revenue_line = find_first_line(accommodation_lines, startswith="room revenue")
     breakfast_line = find_first_line(breakfast_lines, startswith="total revenue")
@@ -347,7 +353,7 @@ def render_summary_block(notes):
     color_map = {
         "good": ("#166534", "#DCFCE7"),
         "warn": ("#92400E", "#FEF3C7"),
-        "bad":  ("#991B1B", "#FEE2E2)")
+        "bad":  ("#991B1B", "#FEE2E2")
     }
 
     for text, level in notes:
@@ -381,15 +387,15 @@ def show_metric(col, name, metric_key, data):
 # =====================
 st.markdown("""
 <div class="hero-box">
-    <div class="hero-title">ChefBrain — PALACE BRIDGE</div>
-    <div class="hero-subtitle">Чистая рабочая версия под Palace Bridge.</div>
+    <div class="hero-title">ChefBrain — OLYMPIA GARDEN</div>
+    <div class="hero-subtitle">Чистая рабочая версия под Olympia Garden.</div>
 </div>
 """, unsafe_allow_html=True)
 
-uploaded_file = st.file_uploader("Загрузи PDF PALACE BRIDGE", type=["pdf"])
+uploaded_file = st.file_uploader("Загрузи PDF OLYMPIA GARDEN", type=["pdf"])
 
 if uploaded_file:
-    hotel, data = parse_palace_pdf(uploaded_file)
+    hotel, data = parse_olympia_pdf(uploaded_file)
     save_history(hotel, data)
 
     st.subheader(f"Отель: {hotel}")
@@ -405,7 +411,7 @@ if uploaded_file:
     render_summary_block(build_summary(data))
 
 st.markdown("---")
-st.subheader("История Palace Bridge")
+st.subheader("История Olympia Garden")
 
 history = load_history()
 if history.empty:
