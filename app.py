@@ -78,21 +78,19 @@ def detect_hotel(text: str) -> str:
 def extract_report_date(text: str) -> str:
     """
     Ищет дату в верхней части документа.
-    Поддерживает форматы:
+    Поддерживает:
     - 18.04.2026
     - 4/20/2026
     Возвращает YYYY-MM-DD
     """
     lines = split_lines(text)
-    header_text = " ".join(lines[:6])
+    header_text = " ".join(lines[:8])
 
-    # dd.mm.yyyy
     m = re.search(r"\b(\d{2})\.(\d{2})\.(\d{4})\b", header_text)
     if m:
         day, month, year = m.groups()
         return f"{year}-{month}-{day}"
 
-    # m/d/yyyy or mm/dd/yyyy
     m = re.search(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b", header_text)
     if m:
         month, day, year = m.groups()
