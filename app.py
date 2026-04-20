@@ -50,7 +50,6 @@ st.markdown("""
     border-radius: 12px;
     padding: 12px 14px;
     margin-bottom: 10px;
-    color: #F3F4F6;
     font-size: 15px;
 }
 </style>
@@ -75,31 +74,26 @@ def parse_number(value):
 
     s = str(value).replace("RUR", "").replace("%", "").strip()
 
-    # 24 082 425
     if " " in s and "," not in s and "." not in s:
         try:
             return float(s.replace(" ", ""))
         except Exception:
             return None
 
-    # 24,082,425  or  87,2  or  1,04
     if "," in s and "." not in s:
         parts = s.split(",")
 
-        # thousands format
         if len(parts) > 1 and all(p.isdigit() for p in parts) and all(len(p) == 3 for p in parts[1:]):
             try:
                 return float("".join(parts))
             except Exception:
                 return None
 
-        # decimal comma
         try:
             return float(s.replace(",", "."))
         except Exception:
             return None
 
-    # 1.04 / 67.9
     if "." in s:
         try:
             return float(s)
@@ -121,23 +115,16 @@ def extract_tokens(line: str):
     return [m.group(0).strip() for m in NUM_PATTERN.finditer(cleaned)]
 
 def parse_metric_line(line: str):
-    """
-    Формат строки:
-    day act | day bud | day ly | day bud idx | day ly idx |
-    MTD act | MTD bud | MTD ly | MTD bud idx | MTD ly idx | ...
-
-    Нам нужны:
-    index 5 -> MTD actual
-    index 9 -> MTD LY index
-    """
     if not line:
         return None, None
 
     tokens = extract_tokens(line)
-
     if len(tokens) < 10:
         return None, None
 
+    # Формат:
+    # day act / day bud / day ly / day bud idx / day ly idx /
+    # mtd act / mtd bud / mtd ly / mtd bud idx / mtd ly idx
     mtd_value = parse_number(tokens[5])
 
     idx_raw = tokens[9].replace(" ", "")
@@ -245,22 +232,15 @@ def parse_palace_pdf(file):
     total_kitchen_lines = get_section_lines(text, ["total kitchen"], ["total f&b", "m&e revenue"])
     total_fb_lines = get_section_lines(text, ["total f&b", "m&e revenue"], ["total spa"])
 
-    # Revenue = Room Revenue from ACCOMMODATION
     revenue_line = find_first_line(accommodation_lines, startswith="room revenue")
-
-    # Breakfast = Total revenue from BREAKFAST
     breakfast_line = find_first_line(breakfast_lines, startswith="total revenue")
-
-    # Occupancy / RevPAR = ACCOMMODATION
     occupancy_line = find_first_line(accommodation_lines, startswith="occ-%")
     revpar_line = find_first_line(accommodation_lines, startswith="revpar")
 
-    # Kitchen = TOTAL KITCHEN -> Rev. / efficient hour, fallback global last
     kitchen_line = find_first_line(total_kitchen_lines, includes=["rev.", "efficient hour"])
     if not kitchen_line:
         kitchen_line = find_last_line(all_lines, includes=["rev.", "efficient hour"])
 
-    # Service = TOTAL F&B -> Rev. / wtrs. Hour, fallback BREAKFAST, then global last
     waiter_line = find_first_line(total_fb_lines, includes=["rev.", "wtrs. hour"])
     if not waiter_line:
         waiter_line = find_first_line(breakfast_lines, includes=["rev.", "wtrs. hour"])
@@ -276,16 +256,7 @@ def parse_palace_pdf(file):
         "Waiter": parse_metric_line(waiter_line),
     }
 
-    debug_rows = [
-        ["Revenue", revenue_line, extract_tokens(revenue_line) if revenue_line else []],
-        ["Breakfast", breakfast_line, extract_tokens(breakfast_line) if breakfast_line else []],
-        ["Occupancy", occupancy_line, extract_tokens(occupancy_line) if occupancy_line else []],
-        ["RevPAR", revpar_line, extract_tokens(revpar_line) if revpar_line else []],
-        ["Kitchen", kitchen_line, extract_tokens(kitchen_line) if kitchen_line else []],
-        ["Service", waiter_line, extract_tokens(waiter_line) if waiter_line else []],
-    ]
-
-    return HOTEL_NAME, data, debug_rows
+    return HOTEL_NAME, data
 
 # =====================
 # HISTORY
@@ -374,16 +345,16 @@ def render_summary_block(notes):
     st.subheader("Вывод")
 
     color_map = {
-        "good": ("#22C55E", "rgba(34,197,94,0.12)"),
-        "warn": ("#F59E0B", "rgba(245,158,11,0.12)"),
-        "bad":  ("#EF4444", "rgba(239,68,68,0.12)")
+        "good": ("#166534", "#DCFCE7"),
+        "warn": ("#92400E", "#FEF3C7"),
+        "bad":  ("#991B1B", "#FEE2E2)")
     }
 
     for text, level in notes:
-        border, bg = color_map.get(level, ("#6B7280", "rgba(107,114,128,0.12)"))
+        border, bg = color_map.get(level, ("#374151", "#F3F4F6"))
         st.markdown(
             f"""
-            <div class="summary-box" style="border-left: 4px solid {border}; background: {bg};">
+            <div class="summary-box" style="border-left: 4px solid {border}; background: {bg}; color: {border};">
                 {text}
             </div>
             """,
@@ -411,14 +382,14 @@ def show_metric(col, name, metric_key, data):
 st.markdown("""
 <div class="hero-box">
     <div class="hero-title">ChefBrain — PALACE BRIDGE</div>
-    <div class="hero-subtitle">Исправленная версия под Palace Bridge с диагностикой найденных строк и токенов.</div>
+    <div class="hero-subtitle">Чистая рабочая версия под Palace Bridge.</div>
 </div>
 """, unsafe_allow_html=True)
 
 uploaded_file = st.file_uploader("Загрузи PDF PALACE BRIDGE", type=["pdf"])
 
 if uploaded_file:
-    hotel, data, debug_rows = parse_palace_pdf(uploaded_file)
+    hotel, data = parse_palace_pdf(uploaded_file)
     save_history(hotel, data)
 
     st.subheader(f"Отель: {hotel}")
@@ -432,12 +403,6 @@ if uploaded_file:
     show_metric(c6, "Service", "Waiter", data)
 
     render_summary_block(build_summary(data))
-
-    st.markdown("---")
-    st.subheader("Диагностика")
-
-    debug_df = pd.DataFrame(debug_rows, columns=["Metric", "Found line", "Tokens"])
-    st.dataframe(debug_df, use_container_width=True, hide_index=True)
 
 st.markdown("---")
 st.subheader("История Palace Bridge")
