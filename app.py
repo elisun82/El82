@@ -66,22 +66,20 @@ def extract_tokens(line):
     return [t.strip() for t in tokens if t.strip()]
 
 def parse_metric_line(line):
-    """
-    Ожидаем:
-    day act / day bud / day ly / day bud idx / day ly idx /
-    MTD act / MTD bud / MTD ly / MTD bud idx / MTD ly idx
-    """
     if not line:
         return None, None
 
     tokens = extract_tokens(line)
 
-    if len(tokens) < 10:
+    # Берём последние 5 значений — это MTD блок
+    if len(tokens) < 5:
         return None, None
 
-    mtd_value = parse_number(tokens[5])
+    last = tokens[-5:]
 
-    idx_raw = tokens[9].replace(" ", "")
+    mtd_value = parse_number(last[0])
+
+    idx_raw = last[4].replace(" ", "")
     if "," in idx_raw and "." in idx_raw:
         idx_raw = idx_raw.replace(",", "")
     else:
