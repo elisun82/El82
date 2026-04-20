@@ -58,31 +58,6 @@ st.markdown("""
 # =====================
 # HELPERS
 # =====================
-def extract_report_date(text: str) -> str:
-    """
-    Ищет дату в левом верхнем углу документа.
-    Поддерживает форматы:
-    - 18.04.2026
-    - 4/20/2026
-    Возвращает дату в формате YYYY-MM-DD
-    """
-    lines = split_lines(text)
-    header_text = " ".join(lines[:5])  # первые строки документа
-
-    # dd.mm.yyyy
-    m = re.search(r"\b(\d{2})\.(\d{2})\.(\d{4})\b", header_text)
-    if m:
-        day, month, year = m.groups()
-        return f"{year}-{month}-{day}"
-
-    # m/d/yyyy или mm/dd/yyyy
-    m = re.search(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b", header_text)
-    if m:
-        month, day, year = m.groups()
-        return f"{year}-{int(month):02d}-{int(day):02d}"
-
-    # fallback: сегодняшняя дата
-    return datetime.now().strftime("%Y-%m-%d")
 NUM_PATTERN = re.compile(
     r"\d{1,3}(?:[ \u00A0]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?"
 )
@@ -99,6 +74,31 @@ def detect_hotel(text: str) -> str:
         if hotel in upper:
             return hotel
     return "UNKNOWN"
+
+def extract_report_date(text: str) -> str:
+    """
+    Ищет дату в верхней части документа.
+    Поддерживает форматы:
+    - 18.04.2026
+    - 4/20/2026
+    Возвращает YYYY-MM-DD
+    """
+    lines = split_lines(text)
+    header_text = " ".join(lines[:6])
+
+    # dd.mm.yyyy
+    m = re.search(r"\b(\d{2})\.(\d{2})\.(\d{4})\b", header_text)
+    if m:
+        day, month, year = m.groups()
+        return f"{year}-{month}-{day}"
+
+    # m/d/yyyy or mm/dd/yyyy
+    m = re.search(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b", header_text)
+    if m:
+        month, day, year = m.groups()
+        return f"{year}-{int(month):02d}-{int(day):02d}"
+
+    return datetime.now().strftime("%Y-%m-%d")
 
 def parse_number(value):
     if value is None:
@@ -424,6 +424,11 @@ def save_history(hotel, report_date, data):
 
     df.to_csv(HISTORY_FILE, index=False)
 
+def load_history():
+    if os.path.exists(HISTORY_FILE):
+        return pd.read_csv(HISTORY_FILE)
+    return pd.DataFrame()
+
 def latest_rows_by_hotel(df):
     if df.empty:
         return pd.DataFrame()
@@ -537,13 +542,13 @@ uploaded_file = st.file_uploader("Загрузи PDF отчёт", type=["pdf"])
 if uploaded_file:
     hotel, report_date, data = parse_uploaded_pdf(uploaded_file)
 
-if hotel == "UNKNOWN":
-    st.error("Не удалось определить отель по файлу.")
-else:
-    save_history(hotel, report_date, data)
+    if hotel == "UNKNOWN":
+        st.error("Не удалось определить отель по файлу.")
+    else:
+        save_history(hotel, report_date, data)
 
-    st.subheader(f"Отель: {hotel}")
-    st.caption(f"Дата отчёта: {report_date}")
+        st.subheader(f"Отель: {hotel}")
+        st.caption(f"Дата отчёта: {report_date}")
 
         c1, c2, c3, c4, c5, c6 = st.columns(6)
         show_metric(c1, "Total revenue", "Revenue", data)
@@ -608,7 +613,7 @@ else:
                 )
                 st.markdown(f"<span class='small-label'>{label}</span>", unsafe_allow_html=True)
 
-        st.subheader("Revenue: сравнение отелей")
+        st.subheader("Total revenue: сравнение отелей")
         if {"date", "hotel", "Revenue_idx"}.issubset(history.columns):
             pivot = history.pivot_table(index="date", columns="hotel", values="Revenue_idx", aggfunc="last")
             if pivot.shape[1] > 0:
