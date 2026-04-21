@@ -96,39 +96,6 @@ DATE_PATTERNS = [
     re.compile(r"\b(\d{4}-\d{2}-\d{2})\b"),
 ]
 
-METRIC_CONFIG = {
-    "revpar": {
-        "section": "ACCOMMODATION",
-        "title": "RevPAR",
-        "display_name": "RevPAR",
-        "value_name": "RevPAR",
-    },
-    "fb_total_revenue": {
-        "section": "TOTAL F&B, M&E REVENUE",
-        "title": "Total revenue",
-        "display_name": "F&B Total Revenue",
-        "value_name": "F&B Total Revenue",
-    },
-    "service_hour": {
-        "section": "TOTAL F&B, M&E REVENUE",
-        "title": "Rev. / wtrs. Hour",
-        "display_name": "Service / wtrs. hour",
-        "value_name": "Service / wtrs. hour",
-    },
-    "kitchen_hour": {
-        "section": "TOTAL F&B, M&E REVENUE",
-        "title": "Rev. / ktch. Hour",
-        "display_name": "Kitchen / ktch. hour",
-        "value_name": "Kitchen / ktch. hour",
-    },
-    "hotel_total_revenue": {
-        "section": "HOTEL TOTAL",
-        "title": "Total revenue",
-        "display_name": "Hotel Total Revenue",
-        "value_name": "Hotel Total Revenue",
-    },
-}
-
 def normalize_spaces(text: str) -> str:
     return re.sub(r"[ \t]+", " ", text or "")
 
@@ -202,6 +169,11 @@ def format_pct(value):
     if value is None:
         return "нет данных"
     return f"{value:+.1f}%"
+
+def fmt_pct(x):
+    if pd.isna(x):
+        return "—"
+    return f"{x:+.1f}%"
 
 def get_color_for_delta(value):
     if value is None:
@@ -559,11 +531,6 @@ def get_status_badge(row):
         return "Рост", "#166534", "#DCFCE7"
     return "Норма", "#1D4ED8", "#DBEAFE"
 
-def fmt_pct(x):
-    if pd.isna(x):
-        return "—"
-    return f"{x:+.1f}%"
-
 def render_kpi_dashboard(latest_df):
     st.subheader("KPI-дэшборд")
 
@@ -626,6 +593,7 @@ def render_kpi_dashboard(latest_df):
 
         with cols[i % 3]:
             st.markdown(card_html, unsafe_allow_html=True)
+
 # =====================
 # UI
 # =====================
