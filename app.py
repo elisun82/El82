@@ -20,66 +20,71 @@ st.set_page_config(page_title="ChefBrain", layout="wide")
 st.markdown("""
 <style>
 .block-container {
-    padding-top: 1.2rem;
+    padding-top: 1.0rem;
     padding-bottom: 2rem;
     max-width: 1450px;
 }
 .hero-box {
     background: linear-gradient(180deg, #101828 0%, #0B1220 100%);
     border: 1px solid rgba(255,255,255,0.06);
-    border-radius: 20px;
-    padding: 20px 24px;
-    margin-bottom: 18px;
+    border-radius: 18px;
+    padding: 18px 22px;
+    margin-bottom: 16px;
 }
 .hero-title {
-    font-size: 34px;
+    font-size: 30px;
     font-weight: 800;
     color: #F9FAFB;
-    margin-bottom: 6px;
+    margin-bottom: 4px;
 }
 .hero-subtitle {
     color: #9CA3AF;
-    font-size: 14px;
+    font-size: 13px;
 }
 .kpi-card {
     background: linear-gradient(180deg, #111827 0%, #0B1220 100%);
     border: 1px solid rgba(255,255,255,0.06);
-    border-radius: 18px;
-    padding: 16px 16px 14px 16px;
-    min-height: 168px;
+    border-radius: 16px;
+    padding: 12px 14px 12px 14px;
+    min-height: 128px;
     margin-bottom: 10px;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+    box-shadow: 0 6px 18px rgba(0,0,0,0.16);
+}
+.kpi-section {
+    font-size: 11px;
+    color: #60A5FA;
+    margin-bottom: 4px;
+    font-weight: 700;
+    text-transform: uppercase;
 }
 .kpi-title {
-    font-size: 13px;
-    color: #94A3B8;
-    margin-bottom: 10px;
+    font-size: 12px;
+    color: #CBD5E1;
+    margin-bottom: 8px;
+    font-weight: 600;
 }
 .kpi-value {
-    font-size: 28px;
+    font-size: 22px;
     font-weight: 800;
     color: #F8FAFC;
-    line-height: 1.1;
-    margin-bottom: 14px;
+    line-height: 1.05;
+    margin-bottom: 10px;
 }
 .kpi-line {
-    font-size: 15px;
+    font-size: 13px;
     font-weight: 700;
-    margin-bottom: 6px;
+    margin-bottom: 4px;
 }
 .kpi-note {
-    font-size: 12px;
+    font-size: 11px;
     color: #94A3B8;
+    margin-top: 6px;
 }
 .summary-box {
     border-radius: 12px;
     padding: 12px 14px;
     margin-bottom: 10px;
     font-size: 15px;
-}
-.small-label {
-    color: #94A3B8;
-    font-size: 12px;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -90,6 +95,12 @@ st.markdown("""
 NUM_PATTERN = re.compile(
     r"\d{1,3}(?:[ \u00A0]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?"
 )
+
+DATE_PATTERNS = [
+    re.compile(r"\b(\d{2}\.\d{2}\.\d{4})\b"),
+    re.compile(r"\b(\d{2}/\d{2}/\d{4})\b"),
+    re.compile(r"\b(\d{4}-\d{2}-\d{2})\b"),
+]
 
 def normalize_spaces(text: str) -> str:
     return re.sub(r"[ \t]+", " ", text or "")
@@ -119,14 +130,12 @@ def parse_number(value):
     if "," in s and "." not in s:
         parts = s.split(",")
 
-        # thousands format: 24,082,425
         if len(parts) > 1 and all(p.isdigit() for p in parts) and all(len(p) == 3 for p in parts[1:]):
             try:
                 return float("".join(parts))
             except Exception:
                 return None
 
-        # decimal comma: 67,9
         try:
             return float(s.replace(",", "."))
         except Exception:
@@ -163,7 +172,7 @@ def format_value(metric_name: str, value):
 
     if metric_name == "RevPAR":
         return f"{value:,.0f}".replace(",", " ")
-    if "Hour" in metric_name or "revenue" in metric_name.lower():
+    if "Hour" in metric_name or "Revenue" in metric_name:
         return f"{value:,.0f}".replace(",", " ")
     return f"{value:,.0f}".replace(",", " ")
 
@@ -219,14 +228,14 @@ def find_first_line(lines, includes=None, startswith=None):
 
 def extract_month_accum_values(line: str):
     """
-    Ожидаем стандартную структуру строки:
+    Стандартная структура:
     Day: Act | Bu | LY | idx_bu | idx_ly
     Month: Accum | Bu.Accum | LY.Accum | idx_bu | idx_ly
 
-    Тогда нам нужны:
+    Нам нужны:
     [5] = Month Accum
-    [6] = Bu. Accum
-    [7] = LY. Accum
+    [6] = Bu.Accum
+    [7] = LY.Accum
     """
     if not line:
         return None, None, None, None, None
@@ -245,17 +254,43 @@ def extract_month_accum_values(line: str):
 
     return actual, budget, ly, vs_budget, vs_ly
 
+def extract_doc_date(first_page_text: str):
+    """
+    Берём дату из верхнего левого колонтитула.
+    Практически это первые несколько непустых строк первой страницы.
+    """
+    lines = split_lines(first_page_text)
+    header_lines = lines[:8]
+
+    for line in header_lines:
+        for pattern in DATE_PATTERNS:
+            m = pattern.search(line)
+            if m:
+                raw = m.group(1)
+                for fmt in ("%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d"):
+                    try:
+                        return datetime.strptime(raw, fmt).strftime("%Y-%m-%d")
+                    except ValueError:
+                        pass
+
+    return datetime.now().strftime("%Y-%m-%d")
+
 # =====================
 # PARSER
 # =====================
 def parse_pdf(file):
     with pdfplumber.open(file) as pdf:
         pages = []
-        for page in pdf.pages:
+        first_page_text = ""
+        for i, page in enumerate(pdf.pages):
             txt = page.extract_text() or ""
-            pages.append(normalize_spaces(txt))
+            txt = normalize_spaces(txt)
+            if i == 0:
+                first_page_text = txt
+            pages.append(txt)
         text = "\n".join(pages)
 
+    doc_date = extract_doc_date(first_page_text)
     hotel = detect_hotel(text)
 
     accommodation_lines = get_section_lines(text, ["accommodation"], ["breakfast"])
@@ -266,51 +301,47 @@ def parse_pdf(file):
 
     data = {}
 
-    # 1. ACCOMMODATION -> RevPAR
     line = find_first_line(accommodation_lines, startswith="revpar")
     data["RevPAR"] = extract_month_accum_values(line)
 
-    # 2. TOTAL F&B, M&E REVENUE -> Total revenue
     line = find_first_line(total_fb_lines, startswith="total revenue")
     data["FB_TotalRevenue"] = extract_month_accum_values(line)
 
-    # 2. TOTAL F&B, M&E REVENUE -> Rev. / wtrs. Hour
     line = find_first_line(total_fb_lines, includes=["rev.", "wtrs. hour"])
     data["ServiceHour"] = extract_month_accum_values(line)
 
-    # 2. TOTAL F&B, M&E REVENUE -> Rev. / ktch. Hour
     line = find_first_line(total_fb_lines, includes=["rev.", "ktch. hour"])
     data["KitchenHour"] = extract_month_accum_values(line)
 
-    # 3. HOTEL TOTAL -> Total revenue
     line = find_first_line(hotel_total_lines, startswith="total revenue")
     data["HotelTotalRevenue"] = extract_month_accum_values(line)
 
-    return hotel, data
+    return doc_date, hotel, data
 
 # =====================
 # HISTORY
 # =====================
-def save_history(hotel, data):
-    today = datetime.now().strftime("%Y-%m-%d")
-
-    row = {"date": today, "hotel": hotel}
-    for metric, values in data.items():
-        row[f"{metric}_actual"] = values[0]
-        row[f"{metric}_budget"] = values[1]
-        row[f"{metric}_ly"] = values[2]
-        row[f"{metric}_vs_budget"] = values[3]
-        row[f"{metric}_vs_ly"] = values[4]
+def save_history(doc_date, hotel, data):
+    row = {
+        "date": doc_date,
+        "hotel": hotel,
+        "RevPAR_actual": data["RevPAR"][0],
+        "FB_TotalRevenue_actual": data["FB_TotalRevenue"][0],
+        "ServiceHour_actual": data["ServiceHour"][0],
+        "KitchenHour_actual": data["KitchenHour"][0],
+        "HotelTotalRevenue_actual": data["HotelTotalRevenue"][0],
+    }
 
     new_df = pd.DataFrame([row])
 
     if os.path.exists(HISTORY_FILE):
         df = pd.read_csv(HISTORY_FILE)
+
         for col in new_df.columns:
             if col not in df.columns:
                 df[col] = pd.NA
 
-        df = df[~((df["date"] == today) & (df["hotel"] == hotel))]
+        df = df[~((df["date"] == doc_date) & (df["hotel"] == hotel))]
         df = pd.concat([df, new_df], ignore_index=True)
     else:
         df = new_df
@@ -397,7 +428,7 @@ def render_summary_block(notes):
 # =====================
 # UI
 # =====================
-def show_kpi_card(col, title, metric_name, values):
+def show_kpi_card(col, section_name, title, metric_name, values):
     actual, budget, ly, vs_budget, vs_ly = values
 
     color_budget = get_color_for_delta(vs_budget)
@@ -405,14 +436,15 @@ def show_kpi_card(col, title, metric_name, values):
 
     with col:
         st.markdown('<div class="kpi-card">', unsafe_allow_html=True)
+        st.markdown(f'<div class="kpi-section">{section_name}</div>', unsafe_allow_html=True)
         st.markdown(f'<div class="kpi-title">{title}</div>', unsafe_allow_html=True)
         st.markdown(f'<div class="kpi-value">{format_value(metric_name, actual)}</div>', unsafe_allow_html=True)
         st.markdown(
-            f'<div class="kpi-line" style="color:{color_budget};">vs Bu. Accum.: {format_pct(vs_budget)}</div>',
+            f'<div class="kpi-line" style="color:{color_budget};">vs Bu: {format_pct(vs_budget)}</div>',
             unsafe_allow_html=True
         )
         st.markdown(
-            f'<div class="kpi-line" style="color:{color_ly};">vs LY. Accum.: {format_pct(vs_ly)}</div>',
+            f'<div class="kpi-line" style="color:{color_ly};">vs LY: {format_pct(vs_ly)}</div>',
             unsafe_allow_html=True
         )
         st.markdown(
@@ -431,19 +463,19 @@ st.markdown("""
 uploaded_file = st.file_uploader("Загрузи PDF отчёт", type=["pdf"])
 
 if uploaded_file:
-    hotel, data = parse_pdf(uploaded_file)
-    save_history(hotel, data)
+    doc_date, hotel, data = parse_pdf(uploaded_file)
+    save_history(doc_date, hotel, data)
 
-    st.subheader(f"Отель: {hotel}")
+    st.subheader(f"Отель: {hotel} · Дата документа: {doc_date}")
 
     c1, c2, c3 = st.columns(3)
     c4, c5 = st.columns(2)
 
-    show_kpi_card(c1, "ACCOMMODATION · RevPAR", "RevPAR", data["RevPAR"])
-    show_kpi_card(c2, "TOTAL F&B · Total revenue", "FB_TotalRevenue", data["FB_TotalRevenue"])
-    show_kpi_card(c3, "TOTAL F&B · Rev. / wtrs. Hour", "ServiceHour", data["ServiceHour"])
-    show_kpi_card(c4, "TOTAL F&B · Rev. / ktch. Hour", "KitchenHour", data["KitchenHour"])
-    show_kpi_card(c5, "HOTEL TOTAL · Total revenue", "HotelTotalRevenue", data["HotelTotalRevenue"])
+    show_kpi_card(c1, "ACCOMMODATION", "RevPAR", "RevPAR", data["RevPAR"])
+    show_kpi_card(c2, "TOTAL F&B, M&E REVENUE", "Total revenue", "FB_TotalRevenue", data["FB_TotalRevenue"])
+    show_kpi_card(c3, "TOTAL F&B, M&E REVENUE", "Rev. / wtrs. Hour", "ServiceHour", data["ServiceHour"])
+    show_kpi_card(c4, "TOTAL F&B, M&E REVENUE", "Rev. / ktch. Hour", "KitchenHour", data["KitchenHour"])
+    show_kpi_card(c5, "HOTEL TOTAL", "Total revenue", "HotelTotalRevenue", data["HotelTotalRevenue"])
 
     render_summary_block(build_summary(data))
 
