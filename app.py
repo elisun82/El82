@@ -639,4 +639,30 @@ st.subheader("История")
 if history.empty:
     st.write("Нет данных")
 else:
-    st.dataframe(history.sort_values(["date", "hotel"]), use_container_width=True)
+    history_sorted = history.sort_values(["date", "hotel"]).copy()
+
+    # колонки с деньгами
+    money_like_cols = [
+        c for c in history_sorted.columns
+        if c.endswith("_actual") or c.endswith("_budget") or c.endswith("_ly")
+    ]
+
+    # колонки с процентами
+    pct_like_cols = [
+        c for c in history_sorted.columns
+        if c.endswith("_vs_budget") or c.endswith("_vs_ly")
+    ]
+
+    # форматирование
+    format_dict = {}
+
+    for col in money_like_cols:
+        format_dict[col] = lambda x: "—" if pd.isna(x) else f"{x:,.0f}".replace(",", " ")
+
+    for col in pct_like_cols:
+        format_dict[col] = lambda x: "—" if pd.isna(x) else f"{x:+.1f}%"
+
+    st.dataframe(
+        history_sorted.style.format(format_dict),
+        use_container_width=True
+    )
