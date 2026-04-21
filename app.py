@@ -582,8 +582,8 @@ show_metric_block(c3, "TOTAL F&B, M&E REVENUE", "Rev. / wtrs. Hour", "service_ho
 show_metric_block(c4, "TOTAL F&B, M&E REVENUE", "Rev. / ktch. Hour", "kitchen_hour", data["kitchen_hour"])
 show_metric_block(c5, "HOTEL TOTAL", "Total revenue", "hotel_total_revenue", data["hotel_total_revenue"])
 
-    render_alert_block(build_alerts(data))
-    render_summary_block(build_summary(data))
+render_alert_block(build_alerts(data))
+render_summary_block(build_summary(data))
 
 st.markdown("---")
 st.subheader("Сравнение отелей")
