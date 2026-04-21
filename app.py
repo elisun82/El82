@@ -577,7 +577,7 @@ if uploaded_file:
     # KPI В ОДНУ ЛИНИЮ
     c1, c2, c3, c4, c5 = st.columns(5)
 
-    show_metric_block(c1, "ACCOMMODATION", "RevPAR", "RevPAR", data["RevPAR"])
+    show_metric_block(c1, "ACCOMMODATION", "RevPAR", "revpar", data["revpar"])
     show_metric_block(c2, "TOTAL F&B", "Total revenue", "FB_TotalRevenue", data["FB_TotalRevenue"])
     show_metric_block(c3, "SERVICE", "Rev. / wtrs. Hour", "ServiceHour", data["ServiceHour"])
     show_metric_block(c4, "KITCHEN", "Rev. / ktch. Hour", "KitchenHour", data["KitchenHour"])
