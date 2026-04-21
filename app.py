@@ -574,7 +574,7 @@ if uploaded_file:
 
     st.subheader(f"Отель: {hotel} · Дата документа: {doc_date}")
 
-   c1, c2, c3, c4, c5 = st.columns(5)
+c1, c2, c3, c4, c5 = st.columns(5)
 
 show_metric_block(c1, "ACCOMMODATION", "RevPAR", "revpar", data["revpar"])
 show_metric_block(c2, "TOTAL F&B, M&E REVENUE", "Total revenue", "fb_total_revenue", data["fb_total_revenue"])
