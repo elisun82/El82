@@ -9,7 +9,7 @@ import streamlit as st
 # =====================
 # SETTINGS
 # =====================
-HISTORY_FILE = "history_accum_v2.csv"
+HISTORY_FILE = "history_accum_v3.csv"
 HOTELS = ["PALACE BRIDGE", "OLYMPIA GARDEN", "VASILIEVSKY"]
 
 st.set_page_config(page_title="ChefBrain", layout="wide")
@@ -53,6 +53,33 @@ st.markdown("""
     margin-top: -6px;
     margin-bottom: 12px;
 }
+.kpi-warning {
+    border-left: 4px solid #991B1B;
+    background: #FEE2E2;
+    color: #991B1B;
+    border-radius: 12px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+    font-size: 15px;
+}
+.kpi-caution {
+    border-left: 4px solid #92400E;
+    background: #FEF3C7;
+    color: #92400E;
+    border-radius: 12px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+    font-size: 15px;
+}
+.kpi-good {
+    border-left: 4px solid #166534;
+    background: #DCFCE7;
+    color: #166534;
+    border-radius: 12px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+    font-size: 15px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -68,6 +95,39 @@ DATE_PATTERNS = [
     re.compile(r"\b(\d{2}/\d{2}/\d{4})\b"),
     re.compile(r"\b(\d{4}-\d{2}-\d{2})\b"),
 ]
+
+METRIC_CONFIG = {
+    "revpar": {
+        "section": "ACCOMMODATION",
+        "title": "RevPAR",
+        "display_name": "RevPAR",
+        "value_name": "RevPAR",
+    },
+    "fb_total_revenue": {
+        "section": "TOTAL F&B, M&E REVENUE",
+        "title": "Total revenue",
+        "display_name": "F&B Total Revenue",
+        "value_name": "F&B Total Revenue",
+    },
+    "service_hour": {
+        "section": "TOTAL F&B, M&E REVENUE",
+        "title": "Rev. / wtrs. Hour",
+        "display_name": "Service / wtrs. hour",
+        "value_name": "Service / wtrs. hour",
+    },
+    "kitchen_hour": {
+        "section": "TOTAL F&B, M&E REVENUE",
+        "title": "Rev. / ktch. Hour",
+        "display_name": "Kitchen / ktch. hour",
+        "value_name": "Kitchen / ktch. hour",
+    },
+    "hotel_total_revenue": {
+        "section": "HOTEL TOTAL",
+        "title": "Total revenue",
+        "display_name": "Hotel Total Revenue",
+        "value_name": "Hotel Total Revenue",
+    },
+}
 
 def normalize_spaces(text: str) -> str:
     return re.sub(r"[ \t]+", " ", text or "")
@@ -217,10 +277,6 @@ def extract_month_accum_values(line: str):
     return actual, budget, ly, vs_budget, vs_ly
 
 def extract_doc_date(first_page_text: str):
-    """
-    Дата из верхнего левого колонтитула:
-    ищем только в первых строках первой страницы.
-    """
     lines = split_lines(first_page_text)
     header_lines = lines[:8]
 
@@ -264,36 +320,40 @@ def parse_pdf(file):
     data = {}
 
     line = find_first_line(accommodation_lines, startswith="revpar")
-    data["RevPAR"] = extract_month_accum_values(line)
+    data["revpar"] = extract_month_accum_values(line)
 
     line = find_first_line(total_fb_lines, startswith="total revenue")
-    data["FB_TotalRevenue"] = extract_month_accum_values(line)
+    data["fb_total_revenue"] = extract_month_accum_values(line)
 
     line = find_first_line(total_fb_lines, includes=["rev.", "wtrs. hour"])
-    data["ServiceHour"] = extract_month_accum_values(line)
+    data["service_hour"] = extract_month_accum_values(line)
 
     line = find_first_line(total_fb_lines, includes=["rev.", "ktch. hour"])
-    data["KitchenHour"] = extract_month_accum_values(line)
+    data["kitchen_hour"] = extract_month_accum_values(line)
 
     line = find_first_line(hotel_total_lines, startswith="total revenue")
-    data["HotelTotalRevenue"] = extract_month_accum_values(line)
+    data["hotel_total_revenue"] = extract_month_accum_values(line)
 
     return doc_date, hotel, data
 
 # =====================
 # HISTORY
 # =====================
-def save_history(doc_date, hotel, data):
-    row = {
-        "date": doc_date,
-        "hotel": hotel,
-        "RevPAR": data["RevPAR"][0],
-        "F&B Total revenue": data["FB_TotalRevenue"][0],
-        "Service / wtrs. hour": data["ServiceHour"][0],
-        "Kitchen / ktch. hour": data["KitchenHour"][0],
-        "Hotel Total revenue": data["HotelTotalRevenue"][0],
-    }
+def flatten_history_row(doc_date, hotel, data):
+    row = {"date": doc_date, "hotel": hotel}
 
+    for metric_key, values in data.items():
+        actual, budget, ly, vs_budget, vs_ly = values
+        row[f"{metric_key}_actual"] = actual
+        row[f"{metric_key}_budget"] = budget
+        row[f"{metric_key}_ly"] = ly
+        row[f"{metric_key}_vs_budget"] = vs_budget
+        row[f"{metric_key}_vs_ly"] = vs_ly
+
+    return row
+
+def save_history(doc_date, hotel, data):
+    row = flatten_history_row(doc_date, hotel, data)
     new_df = pd.DataFrame([row])
 
     if os.path.exists(HISTORY_FILE):
@@ -315,18 +375,29 @@ def load_history():
         return pd.read_csv(HISTORY_FILE)
     return pd.DataFrame()
 
+def latest_rows_by_hotel(df):
+    if df.empty:
+        return pd.DataFrame()
+
+    return (
+        df.sort_values("date")
+          .groupby("hotel", as_index=False)
+          .tail(1)
+          .sort_values("hotel")
+    )
+
 # =====================
 # SUMMARY
 # =====================
 def build_summary(data):
     notes = []
 
-    hotel_total_vs_ly = data["HotelTotalRevenue"][4]
-    hotel_total_vs_budget = data["HotelTotalRevenue"][3]
-    revpar_vs_ly = data["RevPAR"][4]
-    fb_total_vs_ly = data["FB_TotalRevenue"][4]
-    service_vs_ly = data["ServiceHour"][4]
-    kitchen_vs_ly = data["KitchenHour"][4]
+    hotel_total_vs_ly = data["hotel_total_revenue"][4]
+    hotel_total_vs_budget = data["hotel_total_revenue"][3]
+    revpar_vs_ly = data["revpar"][4]
+    fb_total_vs_ly = data["fb_total_revenue"][4]
+    service_vs_ly = data["service_hour"][4]
+    kitchen_vs_ly = data["kitchen_hour"][4]
 
     if hotel_total_vs_ly is not None:
         if hotel_total_vs_ly < 0:
@@ -364,6 +435,39 @@ def build_summary(data):
 
     return notes
 
+def build_alerts(data):
+    alerts = []
+
+    hotel_total_vs_budget = data["hotel_total_revenue"][3]
+    hotel_total_vs_ly = data["hotel_total_revenue"][4]
+    revpar_vs_ly = data["revpar"][4]
+    fb_total_vs_ly = data["fb_total_revenue"][4]
+    service_vs_ly = data["service_hour"][4]
+    kitchen_vs_ly = data["kitchen_hour"][4]
+
+    if hotel_total_vs_budget is not None and hotel_total_vs_budget < 0:
+        alerts.append(("Отель ниже бюджета месяца.", "bad"))
+
+    if hotel_total_vs_ly is not None and hotel_total_vs_ly < 0:
+        alerts.append(("Общая выручка отеля ниже прошлого года.", "bad"))
+
+    if fb_total_vs_ly is not None and fb_total_vs_ly < 0:
+        alerts.append(("F&B total revenue ниже прошлого года.", "bad"))
+
+    if revpar_vs_ly is not None and revpar_vs_ly < 0:
+        alerts.append(("RevPAR ниже прошлого года.", "warn"))
+
+    if (
+        service_vs_ly is not None and kitchen_vs_ly is not None
+        and abs(service_vs_ly - kitchen_vs_ly) >= 10
+    ):
+        alerts.append(("Сильный разрыв динамики между сервисом и кухней.", "warn"))
+
+    if not alerts:
+        alerts.append(("Критичных отклонений не найдено.", "good"))
+
+    return alerts
+
 def render_summary_block(notes):
     if not notes:
         return
@@ -387,8 +491,19 @@ def render_summary_block(notes):
             unsafe_allow_html=True
         )
 
+def render_alert_block(alerts):
+    st.subheader("Красные зоны")
+
+    for text, level in alerts:
+        if level == "bad":
+            st.markdown(f"<div class='kpi-warning'>{text}</div>", unsafe_allow_html=True)
+        elif level == "warn":
+            st.markdown(f"<div class='kpi-caution'>{text}</div>", unsafe_allow_html=True)
+        else:
+            st.markdown(f"<div class='kpi-good'>{text}</div>", unsafe_allow_html=True)
+
 # =====================
-# UI
+# UI HELPERS
 # =====================
 def show_metric_block(col, section_name, title, metric_name, values):
     actual, budget, ly, vs_budget, vs_ly = values
@@ -412,6 +527,24 @@ def show_metric_block(col, section_name, title, metric_name, values):
             unsafe_allow_html=True
         )
 
+def build_compare_table(latest):
+    rows = []
+    for _, row in latest.iterrows():
+        rows.append({
+            "Hotel": row["hotel"],
+            "Date": row["date"],
+            "Hotel Total % LY": row.get("hotel_total_revenue_vs_ly"),
+            "Hotel Total % Bu": row.get("hotel_total_revenue_vs_budget"),
+            "RevPAR % LY": row.get("revpar_vs_ly"),
+            "F&B Total % LY": row.get("fb_total_revenue_vs_ly"),
+            "Service % LY": row.get("service_hour_vs_ly"),
+            "Kitchen % LY": row.get("kitchen_hour_vs_ly"),
+        })
+    return pd.DataFrame(rows)
+
+# =====================
+# UI
+# =====================
 st.markdown("""
 <div class="hero-box">
     <div class="hero-title">ChefBrain</div>
@@ -430,19 +563,80 @@ if uploaded_file:
     c1, c2, c3 = st.columns(3)
     c4, c5 = st.columns(2)
 
-    show_metric_block(c1, "ACCOMMODATION", "RevPAR", "RevPAR", data["RevPAR"])
-    show_metric_block(c2, "TOTAL F&B, M&E REVENUE", "Total revenue", "FB_TotalRevenue", data["FB_TotalRevenue"])
-    show_metric_block(c3, "TOTAL F&B, M&E REVENUE", "Rev. / wtrs. Hour", "ServiceHour", data["ServiceHour"])
-    show_metric_block(c4, "TOTAL F&B, M&E REVENUE", "Rev. / ktch. Hour", "KitchenHour", data["KitchenHour"])
-    show_metric_block(c5, "HOTEL TOTAL", "Total revenue", "HotelTotalRevenue", data["HotelTotalRevenue"])
+    show_metric_block(c1, "ACCOMMODATION", "RevPAR", "revpar", data["revpar"])
+    show_metric_block(c2, "TOTAL F&B, M&E REVENUE", "Total revenue", "fb_total_revenue", data["fb_total_revenue"])
+    show_metric_block(c3, "TOTAL F&B, M&E REVENUE", "Rev. / wtrs. Hour", "service_hour", data["service_hour"])
+    show_metric_block(c4, "TOTAL F&B, M&E REVENUE", "Rev. / ktch. Hour", "kitchen_hour", data["kitchen_hour"])
+    show_metric_block(c5, "HOTEL TOTAL", "Total revenue", "hotel_total_revenue", data["hotel_total_revenue"])
 
+    render_alert_block(build_alerts(data))
     render_summary_block(build_summary(data))
 
 st.markdown("---")
-st.subheader("История")
+st.subheader("Сравнение отелей")
 
 history = load_history()
 if history.empty:
     st.write("Нет данных")
 else:
-    st.dataframe(history, use_container_width=True)
+    latest = latest_rows_by_hotel(history)
+
+    if latest.empty:
+        st.write("Недостаточно данных")
+    else:
+        compare_df = build_compare_table(latest)
+        st.dataframe(compare_df, use_container_width=True, hide_index=True)
+
+        if "hotel_total_revenue_vs_ly" in latest.columns:
+            st.subheader("Hotel Total Revenue vs LY")
+            compare_bar = latest.set_index("hotel")["hotel_total_revenue_vs_ly"]
+            st.bar_chart(compare_bar)
+
+st.markdown("---")
+st.subheader("Графики по отелю")
+
+if history.empty:
+    st.write("Нет данных")
+else:
+    hotel_filter = st.selectbox(
+        "Выбери отель",
+        sorted(history["hotel"].dropna().unique().tolist())
+    )
+
+    filtered = history[history["hotel"] == hotel_filter].copy().sort_values("date")
+
+    if filtered.empty:
+        st.write("Нет данных по выбранному отелю")
+    else:
+        chart_metric = st.selectbox(
+            "Показатель",
+            [
+                "hotel_total_revenue_vs_ly",
+                "hotel_total_revenue_vs_budget",
+                "revpar_vs_ly",
+                "fb_total_revenue_vs_ly",
+                "service_hour_vs_ly",
+                "kitchen_hour_vs_ly",
+            ],
+            index=0
+        )
+
+        nice_names = {
+            "hotel_total_revenue_vs_ly": "Hotel Total Revenue vs LY",
+            "hotel_total_revenue_vs_budget": "Hotel Total Revenue vs Budget",
+            "revpar_vs_ly": "RevPAR vs LY",
+            "fb_total_revenue_vs_ly": "F&B Total Revenue vs LY",
+            "service_hour_vs_ly": "Service / wtrs. hour vs LY",
+            "kitchen_hour_vs_ly": "Kitchen / ktch. hour vs LY",
+        }
+
+        st.markdown(f"**{nice_names[chart_metric]}**")
+        st.line_chart(filtered.set_index("date")[chart_metric])
+
+st.markdown("---")
+st.subheader("История")
+
+if history.empty:
+    st.write("Нет данных")
+else:
+    st.dataframe(history.sort_values(["date", "hotel"]), use_container_width=True)
