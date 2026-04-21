@@ -585,8 +585,7 @@ if uploaded_file:
 
     # вывод
     render_summary_block(build_summary(data))
-    render_summary_block(build_summary(data))
-
+    
 st.markdown("---")
 st.subheader("Сравнение отелей")
 
