@@ -641,21 +641,91 @@ if history.empty:
 else:
     history_sorted = history.sort_values(["date", "hotel"]).copy()
 
-    # колонки с деньгами
-    money_like_cols = [
-        c for c in history_sorted.columns
-        if c.endswith("_actual") or c.endswith("_budget") or c.endswith("_ly")
-    ]
+    # =====================
+    # ПЕРЕИМЕНОВАНИЕ КОЛОНОК
+    # =====================
+    rename_map = {
+        "date": "Дата",
+        "hotel": "Отель",
 
-    # колонки с процентами
-    pct_like_cols = [
-        c for c in history_sorted.columns
-        if c.endswith("_vs_budget") or c.endswith("_vs_ly")
-    ]
+        "hotel_total_revenue_actual": "Отель Выручка Факт",
+        "hotel_total_revenue_budget": "Отель Выручка Бюджет",
+        "hotel_total_revenue_ly": "Отель Выручка LY",
+        "hotel_total_revenue_vs_budget": "Отель vs Бюджет %",
+        "hotel_total_revenue_vs_ly": "Отель vs LY %",
 
-    # форматирование
+        "revpar_actual": "RevPAR Факт",
+        "revpar_budget": "RevPAR Бюджет",
+        "revpar_ly": "RevPAR LY",
+        "revpar_vs_budget": "RevPAR vs Бюджет %",
+        "revpar_vs_ly": "RevPAR vs LY %",
+
+        "fb_total_revenue_actual": "F&B Факт",
+        "fb_total_revenue_budget": "F&B Бюджет",
+        "fb_total_revenue_ly": "F&B LY",
+        "fb_total_revenue_vs_budget": "F&B vs Бюджет %",
+        "fb_total_revenue_vs_ly": "F&B vs LY %",
+
+        "service_hour_actual": "Сервис Факт",
+        "service_hour_budget": "Сервис Бюджет",
+        "service_hour_ly": "Сервис LY",
+        "service_hour_vs_budget": "Сервис vs Бюджет %",
+        "service_hour_vs_ly": "Сервис vs LY %",
+
+        "kitchen_hour_actual": "Кухня Факт",
+        "kitchen_hour_budget": "Кухня Бюджет",
+        "kitchen_hour_ly": "Кухня LY",
+        "kitchen_hour_vs_budget": "Кухня vs Бюджет %",
+        "kitchen_hour_vs_ly": "Кухня vs LY %",
+    }
+
+    history_pretty = history_sorted.rename(columns=rename_map)
+
+    # =====================
+    # ФОРМАТЫ
+    # =====================
+    money_cols = [c for c in history_pretty.columns if "Факт" in c or "Бюджет" in c or c.endswith("LY")]
+    pct_cols = [c for c in history_pretty.columns if "%" in c]
+
     format_dict = {}
 
+    for col in money_cols:
+        format_dict[col] = lambda x: "—" if pd.isna(x) else f"{x:,.0f}".replace(",", " ")
+
+    for col in pct_cols:
+        format_dict[col] = lambda x: "—" if pd.isna(x) else f"{x:+.1f}%"
+
+    # =====================
+    # ПОРЯДОК КОЛОНОК (как в отчёте)
+    # =====================
+    ordered_cols = [
+        "Дата", "Отель",
+
+        "Отель Выручка Факт", "Отель Выручка Бюджет", "Отель Выручка LY",
+        "Отель vs Бюджет %", "Отель vs LY %",
+
+        "RevPAR Факт", "RevPAR Бюджет", "RevPAR LY",
+        "RevPAR vs Бюджет %", "RevPAR vs LY %",
+
+        "F&B Факт", "F&B Бюджет", "F&B LY",
+        "F&B vs Бюджет %", "F&B vs LY %",
+
+        "Сервис Факт", "Сервис Бюджет", "Сервис LY",
+        "Сервис vs Бюджет %", "Сервис vs LY %",
+
+        "Кухня Факт", "Кухня Бюджет", "Кухня LY",
+        "Кухня vs Бюджет %", "Кухня vs LY %",
+    ]
+
+    # оставляем только существующие (на всякий случай)
+    ordered_cols = [c for c in ordered_cols if c in history_pretty.columns]
+
+    history_pretty = history_pretty[ordered_cols]
+
+    st.dataframe(
+        history_pretty.style.format(format_dict),
+        use_container_width=True
+    )
     for col in money_like_cols:
         format_dict[col] = lambda x: "—" if pd.isna(x) else f"{x:,.0f}".replace(",", " ")
 
