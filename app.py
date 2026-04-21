@@ -641,16 +641,14 @@ if history.empty:
 else:
     history_sorted = history.sort_values(["date", "hotel"]).copy()
 
-    # =====================
-    # ПЕРЕИМЕНОВАНИЕ КОЛОНОК
-    # =====================
-    rename_map = {
+    # Переименование
+    history_pretty = history_sorted.rename(columns={
         "date": "Дата",
         "hotel": "Отель",
 
-        "hotel_total_revenue_actual": "Отель Выручка Факт",
-        "hotel_total_revenue_budget": "Отель Выручка Бюджет",
-        "hotel_total_revenue_ly": "Отель Выручка LY",
+        "hotel_total_revenue_actual": "Отель Факт",
+        "hotel_total_revenue_budget": "Отель Бюджет",
+        "hotel_total_revenue_ly": "Отель LY",
         "hotel_total_revenue_vs_budget": "Отель vs Бюджет %",
         "hotel_total_revenue_vs_ly": "Отель vs LY %",
 
@@ -677,62 +675,26 @@ else:
         "kitchen_hour_ly": "Кухня LY",
         "kitchen_hour_vs_budget": "Кухня vs Бюджет %",
         "kitchen_hour_vs_ly": "Кухня vs LY %",
-    }
+    })
 
-    history_pretty = history_sorted.rename(columns=rename_map)
+    # Форматирование (без переменных → без ошибок)
+    def format_cell(col, val):
+        if pd.isna(val):
+            return "—"
 
-    # =====================
-    # ФОРМАТЫ
-    # =====================
-    money_cols = [c for c in history_pretty.columns if "Факт" in c or "Бюджет" in c or c.endswith("LY")]
-    pct_cols = [c for c in history_pretty.columns if "%" in c]
+        # проценты
+        if "%" in col:
+            return f"{val:+.1f}%"
 
-    format_dict = {}
+        # деньги
+        if any(x in col for x in ["Факт", "Бюджет", "LY"]):
+            return f"{val:,.0f}".replace(",", " ")
 
-    for col in money_cols:
-        format_dict[col] = lambda x: "—" if pd.isna(x) else f"{x:,.0f}".replace(",", " ")
+        return val
 
-    for col in pct_cols:
-        format_dict[col] = lambda x: "—" if pd.isna(x) else f"{x:+.1f}%"
-
-    # =====================
-    # ПОРЯДОК КОЛОНОК (как в отчёте)
-    # =====================
-    ordered_cols = [
-        "Дата", "Отель",
-
-        "Отель Выручка Факт", "Отель Выручка Бюджет", "Отель Выручка LY",
-        "Отель vs Бюджет %", "Отель vs LY %",
-
-        "RevPAR Факт", "RevPAR Бюджет", "RevPAR LY",
-        "RevPAR vs Бюджет %", "RevPAR vs LY %",
-
-        "F&B Факт", "F&B Бюджет", "F&B LY",
-        "F&B vs Бюджет %", "F&B vs LY %",
-
-        "Сервис Факт", "Сервис Бюджет", "Сервис LY",
-        "Сервис vs Бюджет %", "Сервис vs LY %",
-
-        "Кухня Факт", "Кухня Бюджет", "Кухня LY",
-        "Кухня vs Бюджет %", "Кухня vs LY %",
-    ]
-
-    # оставляем только существующие (на всякий случай)
-    ordered_cols = [c for c in ordered_cols if c in history_pretty.columns]
-
-    history_pretty = history_pretty[ordered_cols]
-
-    st.dataframe(
-        history_pretty.style.format(format_dict),
-        use_container_width=True
+    styled = history_pretty.style.format(
+        lambda v, c=None: format_cell(c, v),
+        na_rep="—"
     )
-    for col in money_like_cols:
-        format_dict[col] = lambda x: "—" if pd.isna(x) else f"{x:,.0f}".replace(",", " ")
 
-    for col in pct_like_cols:
-        format_dict[col] = lambda x: "—" if pd.isna(x) else f"{x:+.1f}%"
-
-    st.dataframe(
-        history_sorted.style.format(format_dict),
-        use_container_width=True
-    )
+    st.dataframe(styled, use_container_width=True)
