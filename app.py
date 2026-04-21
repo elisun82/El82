@@ -593,47 +593,6 @@ else:
             st.bar_chart(compare_bar)
 
 st.markdown("---")
-st.subheader("Графики по отелю")
-
-if history.empty:
-    st.write("Нет данных")
-else:
-    hotel_filter = st.selectbox(
-        "Выбери отель",
-        sorted(history["hotel"].dropna().unique().tolist())
-    )
-
-    filtered = history[history["hotel"] == hotel_filter].copy().sort_values("date")
-
-    if filtered.empty:
-        st.write("Нет данных по выбранному отелю")
-    else:
-        chart_metric = st.selectbox(
-            "Показатель",
-            [
-                "hotel_total_revenue_vs_ly",
-                "hotel_total_revenue_vs_budget",
-                "revpar_vs_ly",
-                "fb_total_revenue_vs_ly",
-                "service_hour_vs_ly",
-                "kitchen_hour_vs_ly",
-            ],
-            index=0
-        )
-
-        nice_names = {
-            "hotel_total_revenue_vs_ly": "Hotel Total Revenue vs LY",
-            "hotel_total_revenue_vs_budget": "Hotel Total Revenue vs Budget",
-            "revpar_vs_ly": "RevPAR vs LY",
-            "fb_total_revenue_vs_ly": "F&B Total Revenue vs LY",
-            "service_hour_vs_ly": "Service / wtrs. hour vs LY",
-            "kitchen_hour_vs_ly": "Kitchen / ktch. hour vs LY",
-        }
-
-        st.markdown(f"**{nice_names[chart_metric]}**")
-        st.line_chart(filtered.set_index("date")[chart_metric])
-
-st.markdown("---")
 st.subheader("История")
 
 if history.empty:
@@ -677,24 +636,21 @@ else:
         "kitchen_hour_vs_ly": "Кухня vs LY %",
     })
 
-    # Форматирование (без переменных → без ошибок)
-    def format_cell(col, val):
-        if pd.isna(val):
-            return "—"
+    # Копия для форматирования (ВАЖНО)
+    display_df = history_pretty.copy()
+
+    for col in display_df.columns:
 
         # проценты
         if "%" in col:
-            return f"{val:+.1f}%"
+            display_df[col] = display_df[col].apply(
+                lambda x: "—" if pd.isna(x) else f"{x:+.1f}%"
+            )
 
         # деньги
-        if any(x in col for x in ["Факт", "Бюджет", "LY"]):
-            return f"{val:,.0f}".replace(",", " ")
+        elif any(x in col for x in ["Факт", "Бюджет", "LY"]):
+            display_df[col] = display_df[col].apply(
+                lambda x: "—" if pd.isna(x) else f"{x:,.0f}".replace(",", " ")
+            )
 
-        return val
-
-    styled = history_pretty.style.format(
-        lambda v, c=None: format_cell(c, v),
-        na_rep="—"
-    )
-
-    st.dataframe(styled, use_container_width=True)
+    st.dataframe(display_df, use_container_width=True)
