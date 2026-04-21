@@ -573,26 +573,6 @@ if uploaded_file:
     render_summary_block(build_summary(data))
 
 st.markdown("---")
-st.subheader("Сравнение отелей")
-
-history = load_history()
-if history.empty:
-    st.write("Нет данных")
-else:
-    latest = latest_rows_by_hotel(history)
-
-    if latest.empty:
-        st.write("Недостаточно данных")
-    else:
-        compare_df = build_compare_table(latest)
-        st.dataframe(compare_df, use_container_width=True, hide_index=True)
-
-        if "hotel_total_revenue_vs_ly" in latest.columns:
-            st.subheader("Hotel Total Revenue vs LY")
-            compare_bar = latest.set_index("hotel")["hotel_total_revenue_vs_ly"]
-            st.bar_chart(compare_bar)
-
-st.markdown("---")
 st.subheader("История")
 
 if history.empty:
