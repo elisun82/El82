@@ -250,11 +250,9 @@ def find_first_line(lines, includes=None, startswith=None):
 
 def extract_month_accum_values(line: str):
     """
-    Структура строки:
     Day: Act | Bu | LY | idx_bu | idx_ly
     Month: Accum | Bu.Accum | LY.Accum | idx_bu | idx_ly
 
-    Нужно:
     [5] = Accum
     [6] = Bu.Accum
     [7] = LY.Accum
@@ -542,6 +540,93 @@ def build_compare_table(latest):
         })
     return pd.DataFrame(rows)
 
+def get_status_badge(row):
+    checks = [
+        row.get("hotel_total_revenue_vs_budget"),
+        row.get("hotel_total_revenue_vs_ly"),
+        row.get("revpar_vs_ly"),
+        row.get("fb_total_revenue_vs_ly"),
+    ]
+
+    negatives = sum(1 for x in checks if pd.notna(x) and x < 0)
+    strong = sum(1 for x in checks if pd.notna(x) and x >= 8)
+
+    if negatives >= 2:
+        return "Критично", "#991B1B", "#FEE2E2"
+    if negatives >= 1:
+        return "Риск", "#92400E", "#FEF3C7"
+    if strong >= 2:
+        return "Рост", "#166534", "#DCFCE7"
+    return "Норма", "#1D4ED8", "#DBEAFE"
+
+def fmt_pct(x):
+    if pd.isna(x):
+        return "—"
+    return f"{x:+.1f}%"
+
+def render_kpi_dashboard(latest_df):
+    st.subheader("KPI-дэшборд")
+
+    cols = st.columns(3)
+
+    for i, (_, row) in enumerate(latest_df.iterrows()):
+        status_text, status_color, status_bg = get_status_badge(row)
+
+        with cols[i % 3]:
+            st.markdown(
+                f"""
+                <div style="
+                    border: 1px solid rgba(255,255,255,0.08);
+                    border-radius: 16px;
+                    padding: 16px 16px 12px 16px;
+                    background: linear-gradient(180deg, #111827 0%, #0B1220 100%);
+                    min-height: 220px;
+                    margin-bottom: 14px;
+                ">
+                    <div style="font-size: 20px; font-weight: 800; color: #F9FAFB; margin-bottom: 4px;">
+                        {row["hotel"]}
+                    </div>
+                    <div style="font-size: 12px; color: #9CA3AF; margin-bottom: 10px;">
+                        Дата: {row["date"]}
+                    </div>
+
+                    <div style="
+                        display: inline-block;
+                        padding: 6px 10px;
+                        border-radius: 999px;
+                        background: {status_bg};
+                        color: {status_color};
+                        font-size: 12px;
+                        font-weight: 700;
+                        margin-bottom: 14px;
+                    ">
+                        {status_text}
+                    </div>
+
+                    <div style="font-size: 13px; color: #9CA3AF;">Отель vs LY</div>
+                    <div style="font-size: 22px; font-weight: 800; color: #F9FAFB; margin-bottom: 8px;">
+                        {fmt_pct(row.get("hotel_total_revenue_vs_ly"))}
+                    </div>
+
+                    <div style="font-size: 13px; color: #9CA3AF;">Отель vs Бюджет</div>
+                    <div style="font-size: 18px; font-weight: 700; color: #F9FAFB; margin-bottom: 8px;">
+                        {fmt_pct(row.get("hotel_total_revenue_vs_budget"))}
+                    </div>
+
+                    <div style="font-size: 13px; color: #9CA3AF;">RevPAR vs LY</div>
+                    <div style="font-size: 18px; font-weight: 700; color: #F9FAFB; margin-bottom: 8px;">
+                        {fmt_pct(row.get("revpar_vs_ly"))}
+                    </div>
+
+                    <div style="font-size: 13px; color: #9CA3AF;">F&B vs LY</div>
+                    <div style="font-size: 18px; font-weight: 700; color: #F9FAFB;">
+                        {fmt_pct(row.get("fb_total_revenue_vs_ly"))}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
 # =====================
 # UI
 # =====================
@@ -573,6 +658,69 @@ if uploaded_file:
     render_summary_block(build_summary(data))
 
 st.markdown("---")
+st.subheader("Сравнение отелей")
+
+history = load_history()
+if history.empty:
+    st.write("Нет данных")
+else:
+    latest = latest_rows_by_hotel(history)
+
+    if latest.empty:
+        st.write("Недостаточно данных")
+    else:
+        render_kpi_dashboard(latest)
+
+        compare_df = build_compare_table(latest)
+        st.dataframe(compare_df, use_container_width=True, hide_index=True)
+
+        if "hotel_total_revenue_vs_ly" in latest.columns:
+            st.subheader("Hotel Total Revenue vs LY")
+            compare_bar = latest.set_index("hotel")["hotel_total_revenue_vs_ly"]
+            st.bar_chart(compare_bar)
+
+st.markdown("---")
+st.subheader("Графики по отелю")
+
+if history.empty:
+    st.write("Нет данных")
+else:
+    hotel_filter = st.selectbox(
+        "Выбери отель",
+        sorted(history["hotel"].dropna().unique().tolist())
+    )
+
+    filtered = history[history["hotel"] == hotel_filter].copy().sort_values("date")
+
+    if filtered.empty:
+        st.write("Нет данных по выбранному отелю")
+    else:
+        chart_metric = st.selectbox(
+            "Показатель",
+            [
+                "hotel_total_revenue_vs_ly",
+                "hotel_total_revenue_vs_budget",
+                "revpar_vs_ly",
+                "fb_total_revenue_vs_ly",
+                "service_hour_vs_ly",
+                "kitchen_hour_vs_ly",
+            ],
+            index=0
+        )
+
+        nice_names = {
+            "hotel_total_revenue_vs_ly": "Hotel Total Revenue vs LY",
+            "hotel_total_revenue_vs_budget": "Hotel Total Revenue vs Budget",
+            "revpar_vs_ly": "RevPAR vs LY",
+            "fb_total_revenue_vs_ly": "F&B Total Revenue vs LY",
+            "service_hour_vs_ly": "Service / wtrs. hour vs LY",
+            "kitchen_hour_vs_ly": "Kitchen / ktch. hour vs LY",
+        }
+
+        st.markdown(f"**{nice_names[chart_metric]}**")
+        st.line_chart(filtered.set_index("date")[chart_metric])
+
+st.markdown("---")
 st.subheader("История")
 
 if history.empty:
@@ -580,7 +728,6 @@ if history.empty:
 else:
     history_sorted = history.sort_values(["date", "hotel"]).copy()
 
-    # Переименование
     history_pretty = history_sorted.rename(columns={
         "date": "Дата",
         "hotel": "Отель",
@@ -616,18 +763,13 @@ else:
         "kitchen_hour_vs_ly": "Кухня vs LY %",
     })
 
-    # Копия для форматирования (ВАЖНО)
     display_df = history_pretty.copy()
 
     for col in display_df.columns:
-
-        # проценты
         if "%" in col:
             display_df[col] = display_df[col].apply(
                 lambda x: "—" if pd.isna(x) else f"{x:+.1f}%"
             )
-
-        # деньги
         elif any(x in col for x in ["Факт", "Бюджет", "LY"]):
             display_df[col] = display_df[col].apply(
                 lambda x: "—" if pd.isna(x) else f"{x:,.0f}".replace(",", " ")
