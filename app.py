@@ -574,14 +574,13 @@ if uploaded_file:
 
     st.subheader(f"Отель: {hotel} · Дата документа: {doc_date}")
 
-    c1, c2, c3 = st.columns(3)
-    c4, c5 = st.columns(2)
+   c1, c2, c3, c4, c5 = st.columns(5)
 
-    show_metric_block(c1, "ACCOMMODATION", "RevPAR", "revpar", data["revpar"])
-    show_metric_block(c2, "TOTAL F&B, M&E REVENUE", "Total revenue", "fb_total_revenue", data["fb_total_revenue"])
-    show_metric_block(c3, "TOTAL F&B, M&E REVENUE", "Rev. / wtrs. Hour", "service_hour", data["service_hour"])
-    show_metric_block(c4, "TOTAL F&B, M&E REVENUE", "Rev. / ktch. Hour", "kitchen_hour", data["kitchen_hour"])
-    show_metric_block(c5, "HOTEL TOTAL", "Total revenue", "hotel_total_revenue", data["hotel_total_revenue"])
+show_metric_block(c1, "ACCOMMODATION", "RevPAR", "revpar", data["revpar"])
+show_metric_block(c2, "TOTAL F&B, M&E REVENUE", "Total revenue", "fb_total_revenue", data["fb_total_revenue"])
+show_metric_block(c3, "TOTAL F&B, M&E REVENUE", "Rev. / wtrs. Hour", "service_hour", data["service_hour"])
+show_metric_block(c4, "TOTAL F&B, M&E REVENUE", "Rev. / ktch. Hour", "kitchen_hour", data["kitchen_hour"])
+show_metric_block(c5, "HOTEL TOTAL", "Total revenue", "hotel_total_revenue", data["hotel_total_revenue"])
 
     render_alert_block(build_alerts(data))
     render_summary_block(build_summary(data))
