@@ -9,11 +9,10 @@ import streamlit as st
 # =====================
 # SETTINGS
 # =====================
-HISTORY_FILE = "history_all_hotels.csv"
-INFLATION = 8.0
+HISTORY_FILE = "history_accum.csv"
 HOTELS = ["PALACE BRIDGE", "OLYMPIA GARDEN", "VASILIEVSKY"]
 
-st.set_page_config(page_title="ChefBrain Final", layout="wide")
+st.set_page_config(page_title="ChefBrain", layout="wide")
 
 # =====================
 # STYLES
@@ -23,7 +22,7 @@ st.markdown("""
 .block-container {
     padding-top: 1.2rem;
     padding-bottom: 2rem;
-    max-width: 1440px;
+    max-width: 1450px;
 }
 .hero-box {
     background: linear-gradient(180deg, #101828 0%, #0B1220 100%);
@@ -42,15 +41,45 @@ st.markdown("""
     color: #9CA3AF;
     font-size: 14px;
 }
-.small-label {
+.kpi-card {
+    background: linear-gradient(180deg, #111827 0%, #0B1220 100%);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 18px;
+    padding: 16px 16px 14px 16px;
+    min-height: 168px;
+    margin-bottom: 10px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+}
+.kpi-title {
+    font-size: 13px;
     color: #94A3B8;
+    margin-bottom: 10px;
+}
+.kpi-value {
+    font-size: 28px;
+    font-weight: 800;
+    color: #F8FAFC;
+    line-height: 1.1;
+    margin-bottom: 14px;
+}
+.kpi-line {
+    font-size: 15px;
+    font-weight: 700;
+    margin-bottom: 6px;
+}
+.kpi-note {
     font-size: 12px;
+    color: #94A3B8;
 }
 .summary-box {
     border-radius: 12px;
     padding: 12px 14px;
     margin-bottom: 10px;
     font-size: 15px;
+}
+.small-label {
+    color: #94A3B8;
+    font-size: 12px;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -68,11 +97,18 @@ def normalize_spaces(text: str) -> str:
 def split_lines(text: str):
     return [line.strip() for line in text.splitlines() if line.strip()]
 
+def detect_hotel(text: str) -> str:
+    upper = text.upper()
+    for hotel in HOTELS:
+        if hotel in upper:
+            return hotel
+    return "UNKNOWN"
+
 def parse_number(value):
     if value is None:
         return None
 
-    s = str(value).replace("RUR", "").replace("%", "").strip()
+    s = str(value).replace("RUR", "").replace("%", "").replace("\xa0", " ").strip()
 
     if " " in s and "," not in s and "." not in s:
         try:
@@ -83,12 +119,14 @@ def parse_number(value):
     if "," in s and "." not in s:
         parts = s.split(",")
 
+        # thousands format: 24,082,425
         if len(parts) > 1 and all(p.isdigit() for p in parts) and all(len(p) == 3 for p in parts[1:]):
             try:
                 return float("".join(parts))
             except Exception:
                 return None
 
+        # decimal comma: 67,9
         try:
             return float(s.replace(",", "."))
         except Exception:
@@ -114,36 +152,34 @@ def extract_tokens(line: str):
     )
     return [m.group(0).strip() for m in NUM_PATTERN.finditer(cleaned)]
 
-def parse_metric_line(line: str):
-    if not line:
-        return None, None
+def safe_pct(actual, reference):
+    if actual is None or reference is None or reference == 0:
+        return None
+    return round((actual / reference - 1.0) * 100, 1)
 
-    tokens = extract_tokens(line)
-    if len(tokens) < 10:
-        return None, None
+def format_value(metric_name: str, value):
+    if value is None:
+        return "нет данных"
 
-    mtd_value = parse_number(tokens[5])
+    if metric_name == "RevPAR":
+        return f"{value:,.0f}".replace(",", " ")
+    if "Hour" in metric_name or "revenue" in metric_name.lower():
+        return f"{value:,.0f}".replace(",", " ")
+    return f"{value:,.0f}".replace(",", " ")
 
-    idx_raw = tokens[9].replace(" ", "")
-    if "," in idx_raw and "." in idx_raw:
-        idx_raw = idx_raw.replace(",", "")
-    else:
-        idx_raw = idx_raw.replace(",", ".")
+def format_pct(value):
+    if value is None:
+        return "нет данных"
+    return f"{value:+.1f}%"
 
-    try:
-        idx_ratio = float(idx_raw)
-        idx_pct = round((idx_ratio - 1.0) * 100, 1)
-    except Exception:
-        idx_pct = None
-
-    return mtd_value, idx_pct
-
-def detect_hotel(text: str) -> str:
-    upper = text.upper()
-    for hotel in HOTELS:
-        if hotel in upper:
-            return hotel
-    return "UNKNOWN"
+def get_color_for_delta(value):
+    if value is None:
+        return "#9CA3AF"
+    if value < 0:
+        return "#EF4444"
+    if value == 0:
+        return "#F59E0B"
+    return "#22C55E"
 
 def get_section_lines(text, start_keywords, end_keywords=None):
     lines = split_lines(text)
@@ -181,146 +217,38 @@ def find_first_line(lines, includes=None, startswith=None):
         return line
     return None
 
-def find_last_line(lines, includes=None, startswith=None):
-    includes = [x.lower() for x in (includes or [])]
-    startswith = startswith.lower() if startswith else None
+def extract_month_accum_values(line: str):
+    """
+    Ожидаем стандартную структуру строки:
+    Day: Act | Bu | LY | idx_bu | idx_ly
+    Month: Accum | Bu.Accum | LY.Accum | idx_bu | idx_ly
 
-    for line in reversed(lines):
-        low = line.lower()
-        if startswith and not low.startswith(startswith):
-            continue
-        if includes and not all(x in low for x in includes):
-            continue
-        return line
-    return None
+    Тогда нам нужны:
+    [5] = Month Accum
+    [6] = Bu. Accum
+    [7] = LY. Accum
+    """
+    if not line:
+        return None, None, None, None, None
 
-def format_value(name, value):
-    if value is None:
-        return "нет данных"
-    if name == "Occupancy":
-        return f"{value:.1f}%"
-    return f"{value:,.0f}".replace(",", " ")
+    tokens = extract_tokens(line)
 
-def format_idx(idx):
-    if idx is None:
-        return "нет данных"
-    return f"{idx:+.1f}%"
+    if len(tokens) < 8:
+        return None, None, None, None, None
 
-def get_indicator(idx):
-    if idx is None:
-        return "•", "#9CA3AF", "нет данных"
-    if idx < 0:
-        return "▼", "#EF4444", "ниже LY"
-    if idx < 8:
-        return "▲", "#F59E0B", "ниже инфляции"
-    return "▲", "#22C55E", "выше инфляции"
+    actual = parse_number(tokens[5])
+    budget = parse_number(tokens[6])
+    ly = parse_number(tokens[7])
+
+    vs_budget = safe_pct(actual, budget)
+    vs_ly = safe_pct(actual, ly)
+
+    return actual, budget, ly, vs_budget, vs_ly
 
 # =====================
-# HOTEL-SPECIFIC PARSERS
+# PARSER
 # =====================
-def parse_palace_pdf(text: str):
-    all_lines = split_lines(text)
-
-    accommodation_lines = get_section_lines(text, ["accommodation"], ["breakfast"])
-    breakfast_lines = get_section_lines(text, ["breakfast"], ["meeting", "events"])
-    if not breakfast_lines:
-        breakfast_lines = get_section_lines(text, ["breakfast"], ["total kitchen"])
-
-    total_kitchen_lines = get_section_lines(text, ["total kitchen"], ["total f&b", "m&e revenue"])
-    total_fb_lines = get_section_lines(text, ["total f&b", "m&e revenue"], ["total spa"])
-
-    revenue_line = find_first_line(accommodation_lines, startswith="room revenue")
-    breakfast_line = find_first_line(breakfast_lines, startswith="total revenue")
-    occupancy_line = find_first_line(accommodation_lines, startswith="occ-%")
-    revpar_line = find_first_line(accommodation_lines, startswith="revpar")
-
-    kitchen_line = find_first_line(total_kitchen_lines, includes=["rev.", "efficient hour"])
-    if not kitchen_line:
-        kitchen_line = find_last_line(all_lines, includes=["rev.", "efficient hour"])
-
-    waiter_line = find_first_line(total_fb_lines, includes=["rev.", "wtrs. hour"])
-    if not waiter_line:
-        waiter_line = find_first_line(breakfast_lines, includes=["rev.", "wtrs. hour"])
-    if not waiter_line:
-        waiter_line = find_last_line(all_lines, includes=["rev.", "wtrs. hour"])
-
-    return {
-        "Revenue": parse_metric_line(revenue_line),
-        "Breakfast": parse_metric_line(breakfast_line),
-        "Occupancy": parse_metric_line(occupancy_line),
-        "RevPAR": parse_metric_line(revpar_line),
-        "Kitchen": parse_metric_line(kitchen_line),
-        "Waiter": parse_metric_line(waiter_line),
-    }
-
-def parse_olympia_pdf(text: str):
-    all_lines = split_lines(text)
-
-    accommodation_lines = get_section_lines(text, ["accommodation"], ["breakfast"])
-    breakfast_lines = get_section_lines(text, ["breakfast"], ["og - meeting", "events"])
-    if not breakfast_lines:
-        breakfast_lines = get_section_lines(text, ["breakfast"], ["meeting", "events"])
-
-    total_kitchen_lines = get_section_lines(text, ["total kitchen"], ["total f&b", "m&e revenue"])
-    total_fb_lines = get_section_lines(text, ["total f&b", "m&e revenue"], ["hotel total"])
-    hotel_total_lines = get_section_lines(text, ["hotel total"], ["month", "year"])
-
-    revenue_line = find_first_line(hotel_total_lines, startswith="total revenue")
-    breakfast_line = find_first_line(breakfast_lines, startswith="total revenue")
-    occupancy_line = find_first_line(accommodation_lines, startswith="occ-%")
-    revpar_line = find_first_line(accommodation_lines, startswith="revpar")
-    kitchen_line = find_first_line(total_kitchen_lines, includes=["rev.", "efficient hour"])
-    waiter_line = find_first_line(total_fb_lines, includes=["rev.", "wtrs. hour"])
-
-    return {
-        "Revenue": parse_metric_line(revenue_line),
-        "Breakfast": parse_metric_line(breakfast_line),
-        "Occupancy": parse_metric_line(occupancy_line),
-        "RevPAR": parse_metric_line(revpar_line),
-        "Kitchen": parse_metric_line(kitchen_line),
-        "Waiter": parse_metric_line(waiter_line),
-    }
-
-def parse_vasilievsky_pdf(text: str):
-    # Временно такая же логика, как у Palace/Olympia.
-    # После проверки конкретного файла подправим точечно.
-    all_lines = split_lines(text)
-
-    accommodation_lines = get_section_lines(text, ["accommodation"], ["breakfast"])
-    breakfast_lines = get_section_lines(text, ["breakfast"], ["meeting", "events"])
-    if not breakfast_lines:
-        breakfast_lines = get_section_lines(text, ["breakfast"], ["total kitchen"])
-
-    total_kitchen_lines = get_section_lines(text, ["total kitchen"], ["total f&b", "m&e revenue"])
-    total_fb_lines = get_section_lines(text, ["total f&b", "m&e revenue"], ["hotel total"])
-    hotel_total_lines = get_section_lines(text, ["hotel total"], ["month", "year"])
-
-    revenue_line = find_first_line(hotel_total_lines, startswith="total revenue")
-    if not revenue_line:
-        revenue_line = find_first_line(accommodation_lines, startswith="room revenue")
-
-    breakfast_line = find_first_line(breakfast_lines, startswith="total revenue")
-    occupancy_line = find_first_line(accommodation_lines, startswith="occ-%")
-    revpar_line = find_first_line(accommodation_lines, startswith="revpar")
-
-    kitchen_line = find_first_line(total_kitchen_lines, includes=["rev.", "efficient hour"])
-    if not kitchen_line:
-        kitchen_line = find_last_line(all_lines, includes=["rev.", "efficient hour"])
-
-    waiter_line = find_first_line(total_fb_lines, includes=["rev.", "wtrs. hour"])
-    if not waiter_line:
-        waiter_line = find_last_line(all_lines, includes=["rev.", "wtrs. hour"])
-
-    return {
-        "Revenue": parse_metric_line(revenue_line),
-        "Breakfast": parse_metric_line(breakfast_line),
-        "Occupancy": parse_metric_line(occupancy_line),
-        "RevPAR": parse_metric_line(revpar_line),
-        "Kitchen": parse_metric_line(kitchen_line),
-        "Waiter": parse_metric_line(waiter_line),
-    }
-
-def parse_uploaded_pdf(file):
+def parse_pdf(file):
     with pdfplumber.open(file) as pdf:
         pages = []
         for page in pdf.pages:
@@ -330,21 +258,33 @@ def parse_uploaded_pdf(file):
 
     hotel = detect_hotel(text)
 
-    if hotel == "PALACE BRIDGE":
-        data = parse_palace_pdf(text)
-    elif hotel == "OLYMPIA GARDEN":
-        data = parse_olympia_pdf(text)
-    elif hotel == "VASILIEVSKY":
-        data = parse_vasilievsky_pdf(text)
-    else:
-        data = {
-            "Revenue": (None, None),
-            "Breakfast": (None, None),
-            "Occupancy": (None, None),
-            "RevPAR": (None, None),
-            "Kitchen": (None, None),
-            "Waiter": (None, None),
-        }
+    accommodation_lines = get_section_lines(text, ["accommodation"], ["breakfast"])
+    total_fb_lines = get_section_lines(text, ["total f&b", "m&e revenue"], ["total spa"])
+    hotel_total_lines = get_section_lines(text, ["hotel total"], ["month", "year"])
+    if not hotel_total_lines:
+        hotel_total_lines = get_section_lines(text, ["hotel total"])
+
+    data = {}
+
+    # 1. ACCOMMODATION -> RevPAR
+    line = find_first_line(accommodation_lines, startswith="revpar")
+    data["RevPAR"] = extract_month_accum_values(line)
+
+    # 2. TOTAL F&B, M&E REVENUE -> Total revenue
+    line = find_first_line(total_fb_lines, startswith="total revenue")
+    data["FB_TotalRevenue"] = extract_month_accum_values(line)
+
+    # 2. TOTAL F&B, M&E REVENUE -> Rev. / wtrs. Hour
+    line = find_first_line(total_fb_lines, includes=["rev.", "wtrs. hour"])
+    data["ServiceHour"] = extract_month_accum_values(line)
+
+    # 2. TOTAL F&B, M&E REVENUE -> Rev. / ktch. Hour
+    line = find_first_line(total_fb_lines, includes=["rev.", "ktch. hour"])
+    data["KitchenHour"] = extract_month_accum_values(line)
+
+    # 3. HOTEL TOTAL -> Total revenue
+    line = find_first_line(hotel_total_lines, startswith="total revenue")
+    data["HotelTotalRevenue"] = extract_month_accum_values(line)
 
     return hotel, data
 
@@ -356,8 +296,11 @@ def save_history(hotel, data):
 
     row = {"date": today, "hotel": hotel}
     for metric, values in data.items():
-        row[f"{metric}_mtd"] = values[0]
-        row[f"{metric}_idx"] = values[1]
+        row[f"{metric}_actual"] = values[0]
+        row[f"{metric}_budget"] = values[1]
+        row[f"{metric}_ly"] = values[2]
+        row[f"{metric}_vs_budget"] = values[3]
+        row[f"{metric}_vs_ly"] = values[4]
 
     new_df = pd.DataFrame([row])
 
@@ -379,62 +322,52 @@ def load_history():
         return pd.read_csv(HISTORY_FILE)
     return pd.DataFrame()
 
-def latest_rows_by_hotel(df):
-    if df.empty:
-        return pd.DataFrame()
-    return (
-        df.sort_values("date")
-          .groupby("hotel", as_index=False)
-          .tail(1)
-          .sort_values("hotel")
-    )
-
 # =====================
-# SUMMARY / UI
+# SUMMARY
 # =====================
 def build_summary(data):
     notes = []
 
-    revenue_idx = data["Revenue"][1]
-    breakfast_idx = data["Breakfast"][1]
-    occupancy_idx = data["Occupancy"][1]
-    revpar_idx = data["RevPAR"][1]
-    kitchen_idx = data["Kitchen"][1]
-    waiter_idx = data["Waiter"][1]
+    hotel_total_vs_ly = data["HotelTotalRevenue"][4]
+    hotel_total_vs_budget = data["HotelTotalRevenue"][3]
+    revpar_vs_ly = data["RevPAR"][4]
+    fb_total_vs_ly = data["FB_TotalRevenue"][4]
+    service_vs_ly = data["ServiceHour"][4]
+    kitchen_vs_ly = data["KitchenHour"][4]
 
-    if revenue_idx is not None:
-        if revenue_idx < 0:
-            notes.append(("Выручка ниже прошлого года.", "bad"))
-        elif revenue_idx < 8:
-            notes.append((f"Выручка растёт, но не перекрывает инфляцию {INFLATION:.0f}%.", "warn"))
+    if hotel_total_vs_ly is not None:
+        if hotel_total_vs_ly < 0:
+            notes.append(("Общая выручка отеля ниже прошлого года.", "bad"))
+        elif hotel_total_vs_ly < 8:
+            notes.append(("Общая выручка отеля растёт, но слабее ожидаемого темпа.", "warn"))
         else:
-            notes.append(("Выручка растёт выше инфляции.", "good"))
-    else:
-        notes.append(("Нет данных по индексу общей выручки.", "warn"))
+            notes.append(("Общая выручка отеля показывает сильный рост к прошлому году.", "good"))
 
-    if revpar_idx is not None and occupancy_idx is not None:
-        if revpar_idx > occupancy_idx:
-            notes.append(("Рост идёт скорее через цену, а не через загрузку.", "warn"))
-        elif occupancy_idx > revpar_idx:
-            notes.append(("Рост идёт скорее через загрузку, чем через цену.", "good"))
+    if hotel_total_vs_budget is not None:
+        if hotel_total_vs_budget < 0:
+            notes.append(("Факт отеля ниже бюджета месяца.", "bad"))
         else:
-            notes.append(("Цена и загрузка растут сбалансированно.", "good"))
+            notes.append(("Факт отеля держится выше бюджета месяца.", "good"))
 
-    if breakfast_idx is not None:
-        if breakfast_idx < 0:
-            notes.append(("Завтрак просел к прошлому году.", "bad"))
-        elif breakfast_idx < 8:
-            notes.append(("Завтрак растёт ниже инфляции.", "warn"))
+    if revpar_vs_ly is not None:
+        if revpar_vs_ly < 0:
+            notes.append(("RevPAR ниже прошлого года.", "bad"))
         else:
-            notes.append(("Завтрак растёт стабильно.", "good"))
+            notes.append(("RevPAR выше прошлого года.", "good"))
 
-    if kitchen_idx is not None and waiter_idx is not None:
-        if kitchen_idx > waiter_idx:
-            notes.append(("Кухня эффективнее сервиса.", "good"))
-        elif waiter_idx > kitchen_idx:
-            notes.append(("Сервис эффективнее кухни.", "good"))
+    if fb_total_vs_ly is not None:
+        if fb_total_vs_ly < 0:
+            notes.append(("F&B total revenue проседает к прошлому году.", "bad"))
         else:
-            notes.append(("Кухня и сервис на одном уровне.", "good"))
+            notes.append(("F&B total revenue растёт к прошлому году.", "good"))
+
+    if service_vs_ly is not None and kitchen_vs_ly is not None:
+        if service_vs_ly > kitchen_vs_ly:
+            notes.append(("Эффективность сервиса растёт быстрее кухни.", "good"))
+        elif kitchen_vs_ly > service_vs_ly:
+            notes.append(("Эффективность кухни растёт быстрее сервиса.", "good"))
+        else:
+            notes.append(("Кухня и сервис показывают схожую динамику.", "warn"))
 
     return notes
 
@@ -447,89 +380,77 @@ def render_summary_block(notes):
     color_map = {
         "good": ("#166534", "#DCFCE7"),
         "warn": ("#92400E", "#FEF3C7"),
-        "bad":  ("#991B1B", "#FEE2E2"),
+        "bad": ("#991B1B", "#FEE2E2"),
     }
 
     for text, level in notes:
-        border, bg = color_map.get(level, ("#374151", "#F3F4F6"))
+        color, bg = color_map.get(level, ("#374151", "#F3F4F6"))
         st.markdown(
             f"""
-            <div class="summary-box" style="border-left: 4px solid {border}; background: {bg}; color: {border};">
+            <div class="summary-box" style="border-left: 4px solid {color}; background: {bg}; color: {color};">
                 {text}
             </div>
             """,
             unsafe_allow_html=True
         )
 
-def show_metric(col, name, metric_key, data):
-    value, idx = data[metric_key]
-    arrow, color, label = get_indicator(idx)
-    value_str = format_value(name, value)
-    idx_str = format_idx(idx)
+# =====================
+# UI
+# =====================
+def show_kpi_card(col, title, metric_name, values):
+    actual, budget, ly, vs_budget, vs_ly = values
+
+    color_budget = get_color_for_delta(vs_budget)
+    color_ly = get_color_for_delta(vs_ly)
 
     with col:
-        st.markdown(f"**{name}**")
-        st.metric(label=" ", value=value_str)
+        st.markdown('<div class="kpi-card">', unsafe_allow_html=True)
+        st.markdown(f'<div class="kpi-title">{title}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="kpi-value">{format_value(metric_name, actual)}</div>', unsafe_allow_html=True)
         st.markdown(
-            f"<span style='color:{color}; font-weight:700; font-size:18px;'>{arrow} {idx_str}</span>",
+            f'<div class="kpi-line" style="color:{color_budget};">vs Bu. Accum.: {format_pct(vs_budget)}</div>',
             unsafe_allow_html=True
         )
-        st.markdown(f"<span class='small-label'>{label}</span>", unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="kpi-line" style="color:{color_ly};">vs LY. Accum.: {format_pct(vs_ly)}</div>',
+            unsafe_allow_html=True
+        )
+        st.markdown(
+            f'<div class="kpi-note">Bu: {format_value(metric_name, budget)} | LY: {format_value(metric_name, ly)}</div>',
+            unsafe_allow_html=True
+        )
+        st.markdown('</div>', unsafe_allow_html=True)
 
-# =====================
-# MAIN UI
-# =====================
 st.markdown("""
 <div class="hero-box">
-    <div class="hero-title">ChefBrain Final</div>
-    <div class="hero-subtitle">Три отеля на одном экране. Загружай отчёты по одному — система будет накапливать и сравнивать.</div>
+    <div class="hero-title">ChefBrain</div>
+    <div class="hero-subtitle">Month → Accum. vs Bu. Accum. и LY. Accum.</div>
 </div>
 """, unsafe_allow_html=True)
 
 uploaded_file = st.file_uploader("Загрузи PDF отчёт", type=["pdf"])
 
 if uploaded_file:
-    hotel, data = parse_uploaded_pdf(uploaded_file)
+    hotel, data = parse_pdf(uploaded_file)
     save_history(hotel, data)
 
-    st.subheader(f"Текущий отчёт: {hotel}")
+    st.subheader(f"Отель: {hotel}")
 
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
-    show_metric(c1, "Revenue", "Revenue", data)
-    show_metric(c2, "Breakfast", "Breakfast", data)
-    show_metric(c3, "Occupancy", "Occupancy", data)
-    show_metric(c4, "RevPAR", "RevPAR", data)
-    show_metric(c5, "Kitchen", "Kitchen", data)
-    show_metric(c6, "Service", "Waiter", data)
+    c1, c2, c3 = st.columns(3)
+    c4, c5 = st.columns(2)
+
+    show_kpi_card(c1, "ACCOMMODATION · RevPAR", "RevPAR", data["RevPAR"])
+    show_kpi_card(c2, "TOTAL F&B · Total revenue", "FB_TotalRevenue", data["FB_TotalRevenue"])
+    show_kpi_card(c3, "TOTAL F&B · Rev. / wtrs. Hour", "ServiceHour", data["ServiceHour"])
+    show_kpi_card(c4, "TOTAL F&B · Rev. / ktch. Hour", "KitchenHour", data["KitchenHour"])
+    show_kpi_card(c5, "HOTEL TOTAL · Total revenue", "HotelTotalRevenue", data["HotelTotalRevenue"])
 
     render_summary_block(build_summary(data))
 
 st.markdown("---")
-st.subheader("Сравнение отелей")
-
-history = load_history()
-
-if history.empty:
-    st.info("История пока пуста. Загрузи по одному отчёту для каждого отеля.")
-else:
-    latest = latest_rows_by_hotel(history)
-    st.dataframe(latest, use_container_width=True, hide_index=True)
-
-    if {"date", "hotel", "Revenue_idx"}.issubset(history.columns):
-        st.subheader("Revenue %")
-        revenue_pivot = history.pivot_table(index="date", columns="hotel", values="Revenue_idx", aggfunc="last")
-        if not revenue_pivot.empty:
-            st.line_chart(revenue_pivot)
-
-    if {"date", "hotel", "RevPAR_idx"}.issubset(history.columns):
-        st.subheader("RevPAR %")
-        revpar_pivot = history.pivot_table(index="date", columns="hotel", values="RevPAR_idx", aggfunc="last")
-        if not revpar_pivot.empty:
-            st.line_chart(revpar_pivot)
-
-st.markdown("---")
 st.subheader("История")
 
+history = load_history()
 if history.empty:
     st.write("Нет данных")
 else:
