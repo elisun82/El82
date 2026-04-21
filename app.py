@@ -572,63 +572,60 @@ def render_kpi_dashboard(latest_df):
     for i, (_, row) in enumerate(latest_df.iterrows()):
         status_text, status_color, status_bg = get_status_badge(row)
 
-        with cols[i % 3]:
-            st.markdown(
-    f"""
-    <div style="
-        border: 1px solid rgba(255,255,255,0.08);
-        border-radius: 16px;
-        padding: 16px;
-        background: linear-gradient(180deg, #111827 0%, #0B1220 100%);
-        min-height: 220px;
-    ">
-
-        <div style="font-size: 20px; font-weight: 800; color: #F9FAFB;">
-            {row["hotel"]}
-        </div>
-
-        <div style="font-size: 12px; color: #9CA3AF; margin-bottom: 10px;">
-            Дата: {row["date"]}
-        </div>
-
+        card_html = f"""
         <div style="
-            display: inline-block;
-            padding: 6px 10px;
-            border-radius: 999px;
-            background: {status_bg};
-            color: {status_color};
-            font-size: 12px;
-            font-weight: 700;
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 16px;
+            padding: 16px;
+            background: linear-gradient(180deg, #111827 0%, #0B1220 100%);
+            min-height: 220px;
             margin-bottom: 14px;
         ">
-            {status_text}
+            <div style="font-size: 20px; font-weight: 800; color: #F9FAFB; margin-bottom: 4px;">
+                {row["hotel"]}
+            </div>
+
+            <div style="font-size: 12px; color: #9CA3AF; margin-bottom: 10px;">
+                Дата: {row["date"]}
+            </div>
+
+            <div style="
+                display: inline-block;
+                padding: 6px 10px;
+                border-radius: 999px;
+                background: {status_bg};
+                color: {status_color};
+                font-size: 12px;
+                font-weight: 700;
+                margin-bottom: 14px;
+            ">
+                {status_text}
+            </div>
+
+            <div style="font-size: 13px; color: #9CA3AF;">Отель vs LY</div>
+            <div style="font-size: 22px; font-weight: 800; color: #F9FAFB; margin-bottom: 8px;">
+                {fmt_pct(row.get("hotel_total_revenue_vs_ly"))}
+            </div>
+
+            <div style="font-size: 13px; color: #9CA3AF;">Отель vs Бюджет</div>
+            <div style="font-size: 18px; font-weight: 700; color: #F9FAFB; margin-bottom: 8px;">
+                {fmt_pct(row.get("hotel_total_revenue_vs_budget"))}
+            </div>
+
+            <div style="font-size: 13px; color: #9CA3AF;">RevPAR vs LY</div>
+            <div style="font-size: 18px; font-weight: 700; color: #F9FAFB; margin-bottom: 8px;">
+                {fmt_pct(row.get("revpar_vs_ly"))}
+            </div>
+
+            <div style="font-size: 13px; color: #9CA3AF;">F&B vs LY</div>
+            <div style="font-size: 18px; font-weight: 700; color: #F9FAFB;">
+                {fmt_pct(row.get("fb_total_revenue_vs_ly"))}
+            </div>
         </div>
+        """
 
-        <div style="font-size: 13px; color: #9CA3AF;">Отель vs LY</div>
-        <div style="font-size: 22px; font-weight: 800; color: #F9FAFB;">
-            {fmt_pct(row.get("hotel_total_revenue_vs_ly"))}
-        </div>
-
-        <div style="font-size: 13px; color: #9CA3AF;">vs Бюджет</div>
-        <div style="font-size: 18px; font-weight: 700; color: #F9FAFB;">
-            {fmt_pct(row.get("hotel_total_revenue_vs_budget"))}
-        </div>
-
-        <div style="font-size: 13px; color: #9CA3AF;">RevPAR</div>
-        <div style="font-size: 18px; font-weight: 700; color: #F9FAFB;">
-            {fmt_pct(row.get("revpar_vs_ly"))}
-        </div>
-
-        <div style="font-size: 13px; color: #9CA3AF;">F&B</div>
-        <div style="font-size: 18px; font-weight: 700; color: #F9FAFB;">
-            {fmt_pct(row.get("fb_total_revenue_vs_ly"))}
-        </div>
-
-    </div>
-    """,
-    unsafe_allow_html=True   # ← ВОТ ЭТО КРИТИЧНО
-)
-
+        with cols[i % 3]:
+            st.markdown(card_html, unsafe_allow_html=True)
 # =====================
 # UI
 # =====================
