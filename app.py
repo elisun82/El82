@@ -574,15 +574,17 @@ if uploaded_file:
 
     st.subheader(f"Отель: {hotel} · Дата документа: {doc_date}")
 
-c1, c2, c3, c4, c5 = st.columns(5)
+    # KPI В ОДНУ ЛИНИЮ
+    c1, c2, c3, c4, c5 = st.columns(5)
 
-show_metric_block(c1, "ACCOMMODATION", "RevPAR", "revpar", data["revpar"])
-show_metric_block(c2, "TOTAL F&B, M&E REVENUE", "Total revenue", "fb_total_revenue", data["fb_total_revenue"])
-show_metric_block(c3, "TOTAL F&B, M&E REVENUE", "Rev. / wtrs. Hour", "service_hour", data["service_hour"])
-show_metric_block(c4, "TOTAL F&B, M&E REVENUE", "Rev. / ktch. Hour", "kitchen_hour", data["kitchen_hour"])
-show_metric_block(c5, "HOTEL TOTAL", "Total revenue", "hotel_total_revenue", data["hotel_total_revenue"])
+    show_metric_block(c1, "ACCOMMODATION", "RevPAR", "RevPAR", data["RevPAR"])
+    show_metric_block(c2, "TOTAL F&B", "Total revenue", "FB_TotalRevenue", data["FB_TotalRevenue"])
+    show_metric_block(c3, "SERVICE", "Rev. / wtrs. Hour", "ServiceHour", data["ServiceHour"])
+    show_metric_block(c4, "KITCHEN", "Rev. / ktch. Hour", "KitchenHour", data["KitchenHour"])
+    show_metric_block(c5, "HOTEL TOTAL", "Total revenue", "HotelTotalRevenue", data["HotelTotalRevenue"])
 
-render_alert_block(build_alerts(data))
+    # вывод
+    render_summary_block(build_summary(data))
 render_summary_block(build_summary(data))
 
 st.markdown("---")
