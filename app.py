@@ -1,6 +1,10 @@
-import os
+import base64
+import json
 import re
+import urllib.parse
+import urllib.request
 from datetime import datetime
+from io import BytesIO
 
 import pandas as pd
 import pdfplumber
@@ -9,7 +13,7 @@ import streamlit as st
 # =====================
 # SETTINGS
 # =====================
-HISTORY_FILE = "history_accum_v3.csv"
+WEBHOOK_URL = st.secrets["APPS_SCRIPT_WEBHOOK_URL"]
 HOTELS = ["PALACE BRIDGE", "OLYMPIA GARDEN", "VASILIEVSKY"]
 
 st.set_page_config(page_title="ChefBrain", layout="wide")
@@ -90,10 +94,17 @@ NUM_PATTERN = re.compile(
     r"\d{1,3}(?:[ \u00A0]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?"
 )
 
-DATE_PATTERNS = [
+DATE_PATTERNS_TEXT = [
     re.compile(r"\b(\d{2}\.\d{2}\.\d{4})\b"),
     re.compile(r"\b(\d{2}/\d{2}/\d{4})\b"),
     re.compile(r"\b(\d{4}-\d{2}-\d{2})\b"),
+]
+
+DATE_PATTERNS_FILENAME = [
+    re.compile(r"(\d{2}\.\d{2}\.\d{4})"),
+    re.compile(r"(\d{2}-\d{2}-\d{4})"),
+    re.compile(r"(\d{4}-\d{2}-\d{2})"),
+    re.compile(r"(\d{2}_\d{2}_\d{4})"),
 ]
 
 def normalize_spaces(text: str) -> str:
@@ -221,14 +232,6 @@ def find_first_line(lines, includes=None, startswith=None):
     return None
 
 def extract_month_accum_values(line: str):
-    """
-    Day: Act | Bu | LY | idx_bu | idx_ly
-    Month: Accum | Bu.Accum | LY.Accum | idx_bu | idx_ly
-
-    [5] = Accum
-    [6] = Bu.Accum
-    [7] = LY.Accum
-    """
     if not line:
         return None, None, None, None, None
 
@@ -246,12 +249,12 @@ def extract_month_accum_values(line: str):
 
     return actual, budget, ly, vs_budget, vs_ly
 
-def extract_doc_date(first_page_text: str):
+def extract_doc_date_from_text(first_page_text: str):
     lines = split_lines(first_page_text)
     header_lines = lines[:8]
 
     for line in header_lines:
-        for pattern in DATE_PATTERNS:
+        for pattern in DATE_PATTERNS_TEXT:
             m = pattern.search(line)
             if m:
                 raw = m.group(1)
@@ -260,14 +263,31 @@ def extract_doc_date(first_page_text: str):
                         return datetime.strptime(raw, fmt).strftime("%Y-%m-%d")
                     except ValueError:
                         pass
+    return None
 
-    return datetime.now().strftime("%Y-%m-%d")
+def extract_doc_date_from_filename(file_name: str):
+    if not file_name:
+        return None
+
+    base = file_name.rsplit("/", 1)[-1]
+
+    for pattern in DATE_PATTERNS_FILENAME:
+        m = pattern.search(base)
+        if m:
+            raw = m.group(1)
+            raw = raw.replace("_", ".").replace("-", ".")
+            for fmt in ("%d.%m.%Y", "%Y.%m.%d"):
+                try:
+                    return datetime.strptime(raw, fmt).strftime("%Y-%m-%d")
+                except ValueError:
+                    pass
+    return None
 
 # =====================
 # PARSER
 # =====================
-def parse_pdf(file):
-    with pdfplumber.open(file) as pdf:
+def parse_pdf(file_obj, file_name=None):
+    with pdfplumber.open(file_obj) as pdf:
         pages = []
         first_page_text = ""
         for i, page in enumerate(pdf.pages):
@@ -278,7 +298,12 @@ def parse_pdf(file):
             pages.append(txt)
         text = "\n".join(pages)
 
-    doc_date = extract_doc_date(first_page_text)
+    doc_date = (
+        extract_doc_date_from_filename(file_name)
+        or extract_doc_date_from_text(first_page_text)
+        or datetime.now().strftime("%Y-%m-%d")
+    )
+
     hotel = detect_hotel(text)
 
     accommodation_lines = get_section_lines(text, ["accommodation"], ["breakfast"])
@@ -307,9 +332,63 @@ def parse_pdf(file):
     return doc_date, hotel, data
 
 # =====================
-# HISTORY
+# APPS SCRIPT API
 # =====================
-def flatten_history_row(doc_date, hotel, data):
+def api_get(params):
+    query = urllib.parse.urlencode(params)
+    url = f"{WEBHOOK_URL}?{query}"
+
+    with urllib.request.urlopen(url, timeout=60) as resp:
+        raw = resp.read().decode("utf-8")
+
+    result = json.loads(raw)
+    if not result.get("ok"):
+        raise RuntimeError(result.get("error", "GET API error"))
+    return result
+
+def api_post(payload):
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        WEBHOOK_URL,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        raw = resp.read().decode("utf-8")
+
+    result = json.loads(raw)
+    if not result.get("ok"):
+        raise RuntimeError(result.get("error", "POST API error"))
+    return result
+
+def load_history_from_google():
+    result = api_get({"action": "get_history"})
+    rows = result.get("rows", [])
+
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows)
+
+    for col in df.columns:
+        if col in ["date", "hotel"]:
+            continue
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    return df
+
+def list_new_files():
+    result = api_get({"action": "list_new_files"})
+    return result.get("files", [])
+
+def download_file(file_id):
+    result = api_get({"action": "download_file", "file_id": file_id})
+    content = base64.b64decode(result["file_content"])
+    return BytesIO(content), result["file_name"]
+
+def save_history_to_google(doc_date, hotel, data):
     row = {"date": doc_date, "hotel": hotel}
 
     for metric_key, values in data.items():
@@ -320,30 +399,35 @@ def flatten_history_row(doc_date, hotel, data):
         row[f"{metric_key}_vs_budget"] = vs_budget
         row[f"{metric_key}_vs_ly"] = vs_ly
 
-    return row
+    api_post({
+        "action": "save_history",
+        "row": row
+    })
 
-def save_history(doc_date, hotel, data):
-    row = flatten_history_row(doc_date, hotel, data)
-    new_df = pd.DataFrame([row])
+def mark_processed(file_id, file_name):
+    api_post({
+        "action": "mark_processed",
+        "file_id": file_id,
+        "file_name": file_name
+    })
 
-    if os.path.exists(HISTORY_FILE):
-        df = pd.read_csv(HISTORY_FILE)
+def sync_new_files():
+    files = list_new_files()
+    processed_count = 0
+    errors = []
 
-        for col in new_df.columns:
-            if col not in df.columns:
-                df[col] = pd.NA
+    for meta in files:
+        file_id = meta["file_id"]
+        try:
+            file_obj, file_name = download_file(file_id)
+            doc_date, hotel, data = parse_pdf(file_obj, file_name=file_name)
+            save_history_to_google(doc_date, hotel, data)
+            mark_processed(file_id, file_name)
+            processed_count += 1
+        except Exception as e:
+            errors.append(f"{meta.get('file_name', file_id)}: {e}")
 
-        df = df[~((df["date"] == doc_date) & (df["hotel"] == hotel))]
-        df = pd.concat([df, new_df], ignore_index=True)
-    else:
-        df = new_df
-
-    df.to_csv(HISTORY_FILE, index=False)
-
-def load_history():
-    if os.path.exists(HISTORY_FILE):
-        return pd.read_csv(HISTORY_FILE)
-    return pd.DataFrame()
+    return processed_count, errors
 
 def latest_rows_by_hotel(df):
     if df.empty:
@@ -533,7 +617,6 @@ def get_status_badge(row):
 
 def render_kpi_dashboard(latest_df):
     st.subheader("KPI-дэшборд")
-
     cols = st.columns(3)
 
     for i, (_, row) in enumerate(latest_df.iterrows()):
@@ -562,31 +645,57 @@ def render_kpi_dashboard(latest_df):
 st.markdown("""
 <div class="hero-box">
     <div class="hero-title">ChefBrain</div>
-    <div class="hero-subtitle">Month → Accum. vs Bu. Accum. и LY. Accum.</div>
+    <div class="hero-subtitle">Автосинхронизация новых PDF из Google Drive через Apps Script</div>
 </div>
 """, unsafe_allow_html=True)
 
-uploaded_file = st.file_uploader("Загрузи PDF отчёт", type=["pdf"])
+col_sync, col_manual = st.columns([1, 1])
+
+with col_sync:
+    if st.button("🔄 Забрать новые PDF", use_container_width=True):
+        with st.spinner("Синхронизация новых PDF..."):
+            try:
+                processed_count, errors = sync_new_files()
+                st.success(f"Обработано новых файлов: {processed_count}")
+                if errors:
+                    st.warning("Ошибки по некоторым файлам:")
+                    for err in errors:
+                        st.write(err)
+            except Exception as e:
+                st.error(f"Ошибка синхронизации: {e}")
+
+with col_manual:
+    uploaded_file = st.file_uploader("Или загрузить PDF вручную", type=["pdf"])
 
 if uploaded_file:
-    doc_date, hotel, data = parse_pdf(uploaded_file)
-    save_history(doc_date, hotel, data)
+    try:
+        doc_date, hotel, data = parse_pdf(uploaded_file, file_name=uploaded_file.name)
+        save_history_to_google(doc_date, hotel, data)
 
-    st.subheader(f"Отель: {hotel} · Дата документа: {doc_date}")
+        st.subheader(f"Отель: {hotel} · Дата документа: {doc_date}")
 
-    # KPI В ОДНУ ЛИНИЮ
-    c1, c2, c3, c4, c5 = st.columns(5)
+        c1, c2, c3, c4, c5 = st.columns(5)
 
-    show_metric_block(c1, "ACCOMMODATION", "RevPAR", "revpar", data["revpar"])
-    show_metric_block(c2, "TOTAL F&B", "Total revenue", "fb_total_revenue", data["fb_total_revenue"])
-    show_metric_block(c3, "SERVICE", "Rev. / wtrs. Hour", "service_hour", data["service_hour"])
-    show_metric_block(c4, "KITCHEN", "Rev. / ktch. Hour", "kitchen_hour", data["kitchen_hour"])
-    show_metric_block(c5, "HOTEL TOTAL", "Total revenue", "hotel_total_revenue", data["hotel_total_revenue"])
-     
+        show_metric_block(c1, "ACCOMMODATION", "RevPAR", "revpar", data["revpar"])
+        show_metric_block(c2, "TOTAL F&B", "Total revenue", "fb_total_revenue", data["fb_total_revenue"])
+        show_metric_block(c3, "SERVICE", "Rev. / wtrs. Hour", "service_hour", data["service_hour"])
+        show_metric_block(c4, "KITCHEN", "Rev. / ktch. Hour", "kitchen_hour", data["kitchen_hour"])
+        show_metric_block(c5, "HOTEL TOTAL", "Total revenue", "hotel_total_revenue", data["hotel_total_revenue"])
+
+        render_alert_block(build_alerts(data))
+        render_summary_block(build_summary(data))
+    except Exception as e:
+        st.error(f"Ошибка ручной обработки PDF: {e}")
+
 st.markdown("---")
 st.subheader("Сравнение отелей")
 
-history = load_history()
+try:
+    history = load_history_from_google()
+except Exception as e:
+    st.error(f"Не удалось загрузить историю из Google Sheets: {e}")
+    history = pd.DataFrame()
+
 if history.empty:
     st.write("Нет данных")
 else:
