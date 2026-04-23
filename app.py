@@ -1,4 +1,3 @@
-import base64
 import json
 import re
 import urllib.parse
@@ -13,8 +12,17 @@ import streamlit as st
 # =====================
 # SETTINGS
 # =====================
-WEBHOOK_URL = st.secrets["APPS_SCRIPT_WEBHOOK_URL"]
 HOTELS = ["PALACE BRIDGE", "OLYMPIA GARDEN", "VASILIEVSKY"]
+
+TENANT_ID = st.secrets["TENANT_ID"]
+CLIENT_ID = st.secrets["CLIENT_ID"]
+CLIENT_SECRET = st.secrets["CLIENT_SECRET"]
+ONEDRIVE_USER = st.secrets["ONEDRIVE_USER"]
+ONEDRIVE_INBOX_PATH = st.secrets["ONEDRIVE_INBOX_PATH"]
+ONEDRIVE_SYSTEM_PATH = st.secrets["ONEDRIVE_SYSTEM_PATH"]
+
+HISTORY_FILENAME = "history_accum_v4.csv"
+PROCESSED_FILENAME = "processed_files.json"
 
 st.set_page_config(page_title="ChefBrain", layout="wide")
 
@@ -284,7 +292,85 @@ def extract_doc_date_from_filename(file_name: str):
     return None
 
 # =====================
-# PARSER
+# GRAPH API
+# =====================
+def get_graph_token():
+    token_url = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token"
+    body = urllib.parse.urlencode({
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "scope": "https://graph.microsoft.com/.default",
+        "grant_type": "client_credentials",
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        token_url,
+        data=body,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    return data["access_token"]
+
+def graph_request(method, url, token, body=None, content_type="application/json"):
+    headers = {"Authorization": f"Bearer {token}"}
+    if body is not None:
+        headers["Content-Type"] = content_type
+
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers=headers,
+        method=method,
+    )
+
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        content_type_resp = resp.headers.get("Content-Type", "")
+        raw = resp.read()
+
+    if "application/json" in content_type_resp:
+        if not raw:
+            return {}
+        return json.loads(raw.decode("utf-8"))
+    return raw
+
+def quote_drive_path(path: str) -> str:
+    path = path.strip("/")
+    return urllib.parse.quote(path, safe="/")
+
+def onedrive_list_folder_items(folder_path: str, token: str):
+    quoted = quote_drive_path(folder_path)
+    url = (
+        f"https://graph.microsoft.com/v1.0/users/{urllib.parse.quote(ONEDRIVE_USER)}"
+        f"/drive/root:/{quoted}:/children"
+    )
+    return graph_request("GET", url, token)
+
+def onedrive_download_item(item_id: str, token: str):
+    url = (
+        f"https://graph.microsoft.com/v1.0/users/{urllib.parse.quote(ONEDRIVE_USER)}"
+        f"/drive/items/{item_id}/content"
+    )
+    return graph_request("GET", url, token)
+
+def onedrive_upload_small_file(folder_path: str, file_name: str, data_bytes: bytes, token: str):
+    full_path = f"{folder_path.strip('/')}/{file_name}"
+    quoted = quote_drive_path(full_path)
+    url = (
+        f"https://graph.microsoft.com/v1.0/users/{urllib.parse.quote(ONEDRIVE_USER)}"
+        f"/drive/root:/{quoted}:/content"
+    )
+    return graph_request(
+        "PUT",
+        url,
+        token,
+        body=data_bytes,
+        content_type="application/octet-stream",
+    )
+
+# =====================
+# PDF PARSER
 # =====================
 def parse_pdf(file_obj, file_name=None):
     with pdfplumber.open(file_obj) as pdf:
@@ -332,63 +418,47 @@ def parse_pdf(file_obj, file_name=None):
     return doc_date, hotel, data
 
 # =====================
-# APPS SCRIPT API
+# STATE IN ONEDRIVE
 # =====================
-def api_get(params):
-    query = urllib.parse.urlencode(params)
-    url = f"{WEBHOOK_URL}?{query}"
-
-    with urllib.request.urlopen(url, timeout=60) as resp:
-        raw = resp.read().decode("utf-8")
-
-    result = json.loads(raw)
-    if not result.get("ok"):
-        raise RuntimeError(result.get("error", "GET API error"))
-    return result
-
-def api_post(payload):
-    body = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        WEBHOOK_URL,
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        raw = resp.read().decode("utf-8")
-
-    result = json.loads(raw)
-    if not result.get("ok"):
-        raise RuntimeError(result.get("error", "POST API error"))
-    return result
-
-def load_history_from_google():
-    result = api_get({"action": "get_history"})
-    rows = result.get("rows", [])
-
-    if not rows:
+def load_history(token: str):
+    try:
+        raw = onedrive_download_item_by_path(
+            f"{ONEDRIVE_SYSTEM_PATH.strip('/')}/{HISTORY_FILENAME}",
+            token
+        )
+        return pd.read_csv(BytesIO(raw))
+    except Exception:
         return pd.DataFrame()
 
-    df = pd.DataFrame(rows)
+def save_history(history_df: pd.DataFrame, token: str):
+    csv_bytes = history_df.to_csv(index=False).encode("utf-8")
+    onedrive_upload_small_file(ONEDRIVE_SYSTEM_PATH, HISTORY_FILENAME, csv_bytes, token)
 
-    for col in df.columns:
-        if col in ["date", "hotel"]:
-            continue
-        df[col] = pd.to_numeric(df[col], errors="coerce")
+def load_processed_ids(token: str):
+    try:
+        raw = onedrive_download_item_by_path(
+            f"{ONEDRIVE_SYSTEM_PATH.strip('/')}/{PROCESSED_FILENAME}",
+            token
+        )
+        data = json.loads(raw.decode("utf-8"))
+        return set(data.get("processed_ids", []))
+    except Exception:
+        return set()
 
-    return df
+def save_processed_ids(processed_ids: set, token: str):
+    payload = {"processed_ids": sorted(list(processed_ids))}
+    raw = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+    onedrive_upload_small_file(ONEDRIVE_SYSTEM_PATH, PROCESSED_FILENAME, raw, token)
 
-def list_new_files():
-    result = api_get({"action": "list_new_files"})
-    return result.get("files", [])
+def onedrive_download_item_by_path(full_path: str, token: str):
+    quoted = quote_drive_path(full_path)
+    url = (
+        f"https://graph.microsoft.com/v1.0/users/{urllib.parse.quote(ONEDRIVE_USER)}"
+        f"/drive/root:/{quoted}:/content"
+    )
+    return graph_request("GET", url, token)
 
-def download_file(file_id):
-    result = api_get({"action": "download_file", "file_id": file_id})
-    content = base64.b64decode(result["file_content"])
-    return BytesIO(content), result["file_name"]
-
-def save_history_to_google(doc_date, hotel, data):
+def flatten_history_row(doc_date, hotel, data):
     row = {"date": doc_date, "hotel": hotel}
 
     for metric_key, values in data.items():
@@ -399,35 +469,69 @@ def save_history_to_google(doc_date, hotel, data):
         row[f"{metric_key}_vs_budget"] = vs_budget
         row[f"{metric_key}_vs_ly"] = vs_ly
 
-    api_post({
-        "action": "save_history",
-        "row": row
-    })
+    return row
 
-def mark_processed(file_id, file_name):
-    api_post({
-        "action": "mark_processed",
-        "file_id": file_id,
-        "file_name": file_name
-    })
+def upsert_history_row(history_df: pd.DataFrame, row: dict):
+    new_df = pd.DataFrame([row])
 
-def sync_new_files():
-    files = list_new_files()
+    if history_df.empty:
+        return new_df
+
+    for col in new_df.columns:
+        if col not in history_df.columns:
+            history_df[col] = pd.NA
+
+    for col in history_df.columns:
+        if col not in new_df.columns:
+            new_df[col] = pd.NA
+
+    history_df = history_df[~(
+        (history_df["date"].astype(str) == str(row["date"])) &
+        (history_df["hotel"].astype(str) == str(row["hotel"]))
+    )]
+
+    history_df = pd.concat([history_df, new_df[history_df.columns]], ignore_index=True)
+    return history_df
+
+def sync_new_onedrive_pdfs():
+    token = get_graph_token()
+    history_df = load_history(token)
+    processed_ids = load_processed_ids(token)
+
+    items = onedrive_list_folder_items(ONEDRIVE_INBOX_PATH, token).get("value", [])
+    pdf_items = [
+        x for x in items
+        if x.get("name", "").lower().endswith(".pdf") and "file" in x
+    ]
+
     processed_count = 0
     errors = []
 
-    for meta in files:
-        file_id = meta["file_id"]
-        try:
-            file_obj, file_name = download_file(file_id)
-            doc_date, hotel, data = parse_pdf(file_obj, file_name=file_name)
-            save_history_to_google(doc_date, hotel, data)
-            mark_processed(file_id, file_name)
-            processed_count += 1
-        except Exception as e:
-            errors.append(f"{meta.get('file_name', file_id)}: {e}")
+    for item in pdf_items:
+        item_id = item["id"]
+        item_name = item["name"]
 
-    return processed_count, errors
+        if item_id in processed_ids:
+            continue
+
+        try:
+            raw_pdf = onedrive_download_item(item_id, token)
+            file_obj = BytesIO(raw_pdf)
+
+            doc_date, hotel, data = parse_pdf(file_obj, file_name=item_name)
+            row = flatten_history_row(doc_date, hotel, data)
+
+            history_df = upsert_history_row(history_df, row)
+            processed_ids.add(item_id)
+            processed_count += 1
+
+        except Exception as e:
+            errors.append(f"{item_name}: {e}")
+
+    save_history(history_df, token)
+    save_processed_ids(processed_ids, token)
+
+    return history_df, processed_count, errors
 
 def latest_rows_by_hotel(df):
     if df.empty:
@@ -645,24 +749,31 @@ def render_kpi_dashboard(latest_df):
 st.markdown("""
 <div class="hero-box">
     <div class="hero-title">ChefBrain</div>
-    <div class="hero-subtitle">Автосинхронизация новых PDF из Google Drive через Apps Script</div>
+    <div class="hero-subtitle">Синхронизация новых PDF из OneDrive + история в OneDrive</div>
 </div>
 """, unsafe_allow_html=True)
+
+st.markdown(
+    "<div class='small-note'>Источник новых файлов: папка OneDrive. История и обработанные файлы тоже хранятся в OneDrive.</div>",
+    unsafe_allow_html=True
+)
+
+history = pd.DataFrame()
 
 col_sync, col_manual = st.columns([1, 1])
 
 with col_sync:
-    if st.button("🔄 Забрать новые PDF", use_container_width=True):
-        with st.spinner("Синхронизация новых PDF..."):
+    if st.button("🔄 Синхронизировать новые отчёты", use_container_width=True):
+        with st.spinner("Читаю OneDrive и обрабатываю новые PDF..."):
             try:
-                processed_count, errors = sync_new_files()
-                st.success(f"Обработано новых файлов: {processed_count}")
+                history, processed_count, errors = sync_new_onedrive_pdfs()
+                st.success(f"Обработано новых PDF: {processed_count}")
                 if errors:
-                    st.warning("Ошибки по некоторым файлам:")
+                    st.warning("По некоторым файлам были ошибки:")
                     for err in errors:
                         st.write(err)
             except Exception as e:
-                st.error(f"Ошибка синхронизации: {e}")
+                st.error(f"Ошибка синхронизации с OneDrive: {e}")
 
 with col_manual:
     uploaded_file = st.file_uploader("Или загрузить PDF вручную", type=["pdf"])
@@ -670,7 +781,12 @@ with col_manual:
 if uploaded_file:
     try:
         doc_date, hotel, data = parse_pdf(uploaded_file, file_name=uploaded_file.name)
-        save_history_to_google(doc_date, hotel, data)
+        token = get_graph_token()
+        history = load_history(token)
+
+        row = flatten_history_row(doc_date, hotel, data)
+        history = upsert_history_row(history, row)
+        save_history(history, token)
 
         st.subheader(f"Отель: {hotel} · Дата документа: {doc_date}")
 
@@ -687,14 +803,16 @@ if uploaded_file:
     except Exception as e:
         st.error(f"Ошибка ручной обработки PDF: {e}")
 
+if history.empty:
+    try:
+        token = get_graph_token()
+        history = load_history(token)
+    except Exception as e:
+        st.warning(f"Не удалось загрузить историю из OneDrive: {e}")
+        history = pd.DataFrame()
+
 st.markdown("---")
 st.subheader("Сравнение отелей")
-
-try:
-    history = load_history_from_google()
-except Exception as e:
-    st.error(f"Не удалось загрузить историю из Google Sheets: {e}")
-    history = pd.DataFrame()
 
 if history.empty:
     st.write("Нет данных")
