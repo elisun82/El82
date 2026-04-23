@@ -1,4 +1,3 @@
-Супер я всё сделал
 import os
 
 import re
@@ -1290,5 +1289,3 @@ for col in display_df.columns:
 
 
 st.dataframe(display_df, use_container_width=True)
-
-где файл с историей? я не смог его найти нигде
