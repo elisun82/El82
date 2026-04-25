@@ -539,57 +539,19 @@ def render_kpi_dashboard(latest_df):
     for i, (_, row) in enumerate(latest_df.iterrows()):
         status_text, status_color, status_bg = get_status_badge(row)
 
-        card_html = f"""
-        <div style="
-            border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 16px;
-            padding: 16px;
-            background: linear-gradient(180deg, #111827 0%, #0B1220 100%);
-            min-height: 220px;
-            margin-bottom: 14px;
-        ">
-            <div style="font-size: 20px; font-weight: 800; color: #F9FAFB; margin-bottom: 4px;">
-                {row["hotel"]}
-            </div>
-
-            <div style="font-size: 12px; color: #9CA3AF; margin-bottom: 10px;">
-                Дата: {row["date"]}
-            </div>
-
-            <div style="
-                display: inline-block;
-                padding: 6px 10px;
-                border-radius: 999px;
-                background: {status_bg};
-                color: {status_color};
-                font-size: 12px;
-                font-weight: 700;
-                margin-bottom: 14px;
-            ">
-                {status_text}
-            </div>
-
-            <div style="font-size: 13px; color: #9CA3AF;">Отель vs LY</div>
-            <div style="font-size: 22px; font-weight: 800; color: #F9FAFB; margin-bottom: 8px;">
-                {fmt_pct(row.get("hotel_total_revenue_vs_ly"))}
-            </div>
-
-            <div style="font-size: 13px; color: #9CA3AF;">Отель vs Бюджет</div>
-            <div style="font-size: 18px; font-weight: 700; color: #F9FAFB; margin-bottom: 8px;">
-                {fmt_pct(row.get("hotel_total_revenue_vs_budget"))}
-            </div>
-
-            <div style="font-size: 13px; color: #9CA3AF;">RevPAR vs LY</div>
-            <div style="font-size: 18px; font-weight: 700; color: #F9FAFB; margin-bottom: 8px;">
-                {fmt_pct(row.get("revpar_vs_ly"))}
-            </div>
-
-            <div style="font-size: 13px; color: #9CA3AF;">F&B vs LY</div>
-            <div style="font-size: 18px; font-weight: 700; color: #F9FAFB;">
-                {fmt_pct(row.get("fb_total_revenue_vs_ly"))}
-            </div>
-        </div>
-        """
+        card_html = f"""<div style="border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 16px; background: linear-gradient(180deg, #111827 0%, #0B1220 100%); min-height: 220px; margin-bottom: 14px;">
+<div style="font-size: 20px; font-weight: 800; color: #F9FAFB; margin-bottom: 4px;">{row["hotel"]}</div>
+<div style="font-size: 12px; color: #9CA3AF; margin-bottom: 10px;">Дата: {row["date"]}</div>
+<div style="display: inline-block; padding: 6px 10px; border-radius: 999px; background: {status_bg}; color: {status_color}; font-size: 12px; font-weight: 700; margin-bottom: 14px;">{status_text}</div>
+<div style="font-size: 13px; color: #9CA3AF;">Отель vs LY</div>
+<div style="font-size: 22px; font-weight: 800; color: #F9FAFB; margin-bottom: 8px;">{fmt_pct(row.get("hotel_total_revenue_vs_ly"))}</div>
+<div style="font-size: 13px; color: #9CA3AF;">Отель vs Бюджет</div>
+<div style="font-size: 18px; font-weight: 700; color: #F9FAFB; margin-bottom: 8px;">{fmt_pct(row.get("hotel_total_revenue_vs_budget"))}</div>
+<div style="font-size: 13px; color: #9CA3AF;">RevPAR vs LY</div>
+<div style="font-size: 18px; font-weight: 700; color: #F9FAFB; margin-bottom: 8px;">{fmt_pct(row.get("revpar_vs_ly"))}</div>
+<div style="font-size: 13px; color: #9CA3AF;">F&B vs LY</div>
+<div style="font-size: 18px; font-weight: 700; color: #F9FAFB;">{fmt_pct(row.get("fb_total_revenue_vs_ly"))}</div>
+</div>"""
 
         with cols[i % 3]:
             st.markdown(card_html, unsafe_allow_html=True)
@@ -612,18 +574,15 @@ if uploaded_file:
 
     st.subheader(f"Отель: {hotel} · Дата документа: {doc_date}")
 
-    c1, c2, c3 = st.columns(3)
-    c4, c5 = st.columns(2)
+    # KPI В ОДНУ ЛИНИЮ
+    c1, c2, c3, c4, c5 = st.columns(5)
 
     show_metric_block(c1, "ACCOMMODATION", "RevPAR", "revpar", data["revpar"])
-    show_metric_block(c2, "TOTAL F&B, M&E REVENUE", "Total revenue", "fb_total_revenue", data["fb_total_revenue"])
-    show_metric_block(c3, "TOTAL F&B, M&E REVENUE", "Rev. / wtrs. Hour", "service_hour", data["service_hour"])
-    show_metric_block(c4, "TOTAL F&B, M&E REVENUE", "Rev. / ktch. Hour", "kitchen_hour", data["kitchen_hour"])
+    show_metric_block(c2, "TOTAL F&B", "Total revenue", "fb_total_revenue", data["fb_total_revenue"])
+    show_metric_block(c3, "SERVICE", "Rev. / wtrs. Hour", "service_hour", data["service_hour"])
+    show_metric_block(c4, "KITCHEN", "Rev. / ktch. Hour", "kitchen_hour", data["kitchen_hour"])
     show_metric_block(c5, "HOTEL TOTAL", "Total revenue", "hotel_total_revenue", data["hotel_total_revenue"])
-
-    render_alert_block(build_alerts(data))
-    render_summary_block(build_summary(data))
-
+     
 st.markdown("---")
 st.subheader("Сравнение отелей")
 
@@ -743,3 +702,5 @@ else:
             )
 
     st.dataframe(display_df, use_container_width=True)
+
+где файл с историей? я не смог его найти нигде
