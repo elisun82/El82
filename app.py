@@ -822,3 +822,11 @@ if os.path.exists(HISTORY_FILE_LOCAL_BACKUP):
             file_name=HISTORY_FILE_LOCAL_BACKUP,
             mime="text/csv"
         )
+if os.path.exists("history_accum_v3.csv"):
+    with open("history_accum_v3.csv", "rb") as f:
+        st.download_button(
+            "Скачать старую локальную историю",
+            f,
+            file_name="history_accum_v3.csv",
+            mime="text/csv"
+        )
