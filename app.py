@@ -411,12 +411,30 @@ def latest_rows_by_hotel(df):
     if df.empty:
         return pd.DataFrame()
 
-    return (
-        df.sort_values("date")
+    df = df.copy()
+
+    if "date" not in df.columns or "hotel" not in df.columns:
+        return pd.DataFrame()
+
+    df["date"] = df["date"].astype(str)
+
+    df["_date_sort"] = pd.to_datetime(
+        df["date"],
+        errors="coerce",
+        dayfirst=False
+    )
+
+    df["_date_sort"] = df["_date_sort"].fillna(pd.Timestamp("1900-01-01"))
+
+    latest = (
+        df.sort_values("_date_sort")
           .groupby("hotel", as_index=False)
           .tail(1)
           .sort_values("hotel")
+          .drop(columns=["_date_sort"])
     )
+
+    return latest
 
 # =====================
 # SUMMARY
@@ -619,7 +637,10 @@ def render_kpi_dashboard(latest_df):
             st.markdown(card_html, unsafe_allow_html=True)
 
 def make_pretty_history(history):
-    history_sorted = history.sort_values(["date", "hotel"]).copy()
+    history_for_display = history.copy()
+    history_for_display["date"] = history_for_display["date"].astype(str)
+
+    history_sorted = history_for_display.sort_values(["date", "hotel"]).copy()
 
     history_pretty = history_sorted.rename(columns={
         "date": "Дата",
