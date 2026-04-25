@@ -702,5 +702,3 @@ else:
             )
 
     st.dataframe(display_df, use_container_width=True)
-
-где файл с историей? я не смог его найти нигде
