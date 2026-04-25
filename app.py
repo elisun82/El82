@@ -702,3 +702,12 @@ else:
             )
 
     st.dataframe(display_df, use_container_width=True)
+if not history.empty:
+    csv = history.to_csv(index=False).encode('utf-8')
+
+    st.download_button(
+        label="📥 Скачать историю CSV",
+        data=csv,
+        file_name="chefbrain_history.csv",
+        mime="text/csv"
+    )
