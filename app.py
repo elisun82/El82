@@ -4,12 +4,13 @@ from datetime import datetime
 
 import pandas as pd
 import pdfplumber
+import requests
 import streamlit as st
 
 # =====================
 # SETTINGS
 # =====================
-HISTORY_FILE = "history_accum_v3.csv"
+HISTORY_FILE_LOCAL_BACKUP = "history_accum_v3.csv"
 HOTELS = ["PALACE BRIDGE", "OLYMPIA GARDEN", "VASILIEVSKY"]
 
 st.set_page_config(page_title="ChefBrain", layout="wide")
@@ -161,12 +162,12 @@ def safe_pct(actual, reference):
     return round((actual / reference - 1.0) * 100, 1)
 
 def format_value(metric_name: str, value):
-    if value is None:
+    if value is None or pd.isna(value):
         return "нет данных"
     return f"{value:,.0f}".replace(",", " ")
 
 def format_pct(value):
-    if value is None:
+    if value is None or pd.isna(value):
         return "нет данных"
     return f"{value:+.1f}%"
 
@@ -176,7 +177,7 @@ def fmt_pct(x):
     return f"{x:+.1f}%"
 
 def get_color_for_delta(value):
-    if value is None:
+    if value is None or pd.isna(value):
         return "#9CA3AF"
     if value < 0:
         return "#EF4444"
@@ -221,14 +222,6 @@ def find_first_line(lines, includes=None, startswith=None):
     return None
 
 def extract_month_accum_values(line: str):
-    """
-    Day: Act | Bu | LY | idx_bu | idx_ly
-    Month: Accum | Bu.Accum | LY.Accum | idx_bu | idx_ly
-
-    [5] = Accum
-    [6] = Bu.Accum
-    [7] = LY.Accum
-    """
     if not line:
         return None, None, None, None, None
 
@@ -307,7 +300,7 @@ def parse_pdf(file):
     return doc_date, hotel, data
 
 # =====================
-# HISTORY
+# GOOGLE APPS SCRIPT HISTORY
 # =====================
 def flatten_history_row(doc_date, hotel, data):
     row = {"date": doc_date, "hotel": hotel}
@@ -322,28 +315,97 @@ def flatten_history_row(doc_date, hotel, data):
 
     return row
 
-def save_history(doc_date, hotel, data):
-    row = flatten_history_row(doc_date, hotel, data)
-    new_df = pd.DataFrame([row])
+def get_script_url():
+    return st.secrets["GOOGLE_SCRIPT_URL"]
 
-    if os.path.exists(HISTORY_FILE):
-        df = pd.read_csv(HISTORY_FILE)
-
-        for col in new_df.columns:
-            if col not in df.columns:
-                df[col] = pd.NA
-
-        df = df[~((df["date"] == doc_date) & (df["hotel"] == hotel))]
-        df = pd.concat([df, new_df], ignore_index=True)
-    else:
-        df = new_df
-
-    df.to_csv(HISTORY_FILE, index=False)
+def get_secret_key():
+    return st.secrets["CHEFBRAIN_SECRET_KEY"]
 
 def load_history():
-    if os.path.exists(HISTORY_FILE):
-        return pd.read_csv(HISTORY_FILE)
-    return pd.DataFrame()
+    try:
+        response = requests.get(
+            get_script_url(),
+            params={"key": get_secret_key()},
+            timeout=20
+        )
+
+        response.raise_for_status()
+        result = response.json()
+
+        if not result.get("ok"):
+            st.error(f"Google Script error: {result.get('error')}")
+            return pd.DataFrame()
+
+        rows = result.get("rows", [])
+
+        if not rows:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(rows)
+
+        for col in df.columns:
+            if col not in ["date", "hotel"]:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        return df
+
+    except Exception as e:
+        st.error(f"Ошибка чтения истории из Google Sheets: {e}")
+        return pd.DataFrame()
+
+def save_full_history_to_google(df):
+    try:
+        df = df.copy()
+        df = df.where(pd.notna(df), "")
+
+        payload = {
+            "key": get_secret_key(),
+            "rows": df.to_dict(orient="records")
+        }
+
+        response = requests.post(
+            get_script_url(),
+            json=payload,
+            timeout=30
+        )
+
+        response.raise_for_status()
+        result = response.json()
+
+        if not result.get("ok"):
+            st.error(f"Google Script error: {result.get('error')}")
+            return False
+
+        return True
+
+    except Exception as e:
+        st.error(f"Ошибка записи истории в Google Sheets: {e}")
+        return False
+
+def save_history(doc_date, hotel, data):
+    new_row = flatten_history_row(doc_date, hotel, data)
+    new_df = pd.DataFrame([new_row])
+
+    history = load_history()
+
+    if history.empty:
+        final_df = new_df
+    else:
+        for col in new_df.columns:
+            if col not in history.columns:
+                history[col] = pd.NA
+
+        for col in history.columns:
+            if col not in new_df.columns:
+                new_df[col] = pd.NA
+
+        history = history[~((history["date"] == doc_date) & (history["hotel"] == hotel))]
+        final_df = pd.concat([history, new_df], ignore_index=True)
+
+    ok = save_full_history_to_google(final_df)
+
+    if ok:
+        st.success("История сохранена в Google Sheets.")
 
 def latest_rows_by_hotel(df):
     if df.empty:
@@ -556,13 +618,65 @@ def render_kpi_dashboard(latest_df):
         with cols[i % 3]:
             st.markdown(card_html, unsafe_allow_html=True)
 
+def make_pretty_history(history):
+    history_sorted = history.sort_values(["date", "hotel"]).copy()
+
+    history_pretty = history_sorted.rename(columns={
+        "date": "Дата",
+        "hotel": "Отель",
+
+        "hotel_total_revenue_actual": "Отель Факт",
+        "hotel_total_revenue_budget": "Отель Бюджет",
+        "hotel_total_revenue_ly": "Отель LY",
+        "hotel_total_revenue_vs_budget": "Отель vs Бюджет %",
+        "hotel_total_revenue_vs_ly": "Отель vs LY %",
+
+        "revpar_actual": "RevPAR Факт",
+        "revpar_budget": "RevPAR Бюджет",
+        "revpar_ly": "RevPAR LY",
+        "revpar_vs_budget": "RevPAR vs Бюджет %",
+        "revpar_vs_ly": "RevPAR vs LY %",
+
+        "fb_total_revenue_actual": "F&B Факт",
+        "fb_total_revenue_budget": "F&B Бюджет",
+        "fb_total_revenue_ly": "F&B LY",
+        "fb_total_revenue_vs_budget": "F&B vs Бюджет %",
+        "fb_total_revenue_vs_ly": "F&B vs LY %",
+
+        "service_hour_actual": "Сервис Факт",
+        "service_hour_budget": "Сервис Бюджет",
+        "service_hour_ly": "Сервис LY",
+        "service_hour_vs_budget": "Сервис vs Бюджет %",
+        "service_hour_vs_ly": "Сервис vs LY %",
+
+        "kitchen_hour_actual": "Кухня Факт",
+        "kitchen_hour_budget": "Кухня Бюджет",
+        "kitchen_hour_ly": "Кухня LY",
+        "kitchen_hour_vs_budget": "Кухня vs Бюджет %",
+        "kitchen_hour_vs_ly": "Кухня vs LY %",
+    })
+
+    display_df = history_pretty.copy()
+
+    for col in display_df.columns:
+        if "%" in col:
+            display_df[col] = display_df[col].apply(
+                lambda x: "—" if pd.isna(x) else f"{x:+.1f}%"
+            )
+        elif any(x in col for x in ["Факт", "Бюджет", "LY"]):
+            display_df[col] = display_df[col].apply(
+                lambda x: "—" if pd.isna(x) else f"{x:,.0f}".replace(",", " ")
+            )
+
+    return display_df
+
 # =====================
 # UI
 # =====================
 st.markdown("""
 <div class="hero-box">
     <div class="hero-title">ChefBrain</div>
-    <div class="hero-subtitle">Month → Accum. vs Bu. Accum. и LY. Accum.</div>
+    <div class="hero-subtitle">Month → Accum. vs Bu. Accum. и LY. Accum. · Google Sheets History</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -574,7 +688,6 @@ if uploaded_file:
 
     st.subheader(f"Отель: {hotel} · Дата документа: {doc_date}")
 
-    # KPI В ОДНУ ЛИНИЮ
     c1, c2, c3, c4, c5 = st.columns(5)
 
     show_metric_block(c1, "ACCOMMODATION", "RevPAR", "revpar", data["revpar"])
@@ -582,7 +695,74 @@ if uploaded_file:
     show_metric_block(c3, "SERVICE", "Rev. / wtrs. Hour", "service_hour", data["service_hour"])
     show_metric_block(c4, "KITCHEN", "Rev. / ktch. Hour", "kitchen_hour", data["kitchen_hour"])
     show_metric_block(c5, "HOTEL TOTAL", "Total revenue", "hotel_total_revenue", data["hotel_total_revenue"])
-     
+
+    render_alert_block(build_alerts(data))
+    render_summary_block(build_summary(data))
+
+history = load_history()
+
+st.markdown("---")
+st.subheader("Сравнение отелей")
+
+if history.empty:
+    st.write("Нет данных")
+else:
+    latest = latest_rows_by_hotel(history)
+
+    if latest.empty:
+        st.write("Недостаточно данных")
+    else:
+        render_kpi_dashboard(latest)
+
+        compare_df = build_compare_table(latest)
+        st.dataframe(compare_df, use_container_width=True, hide_index=True)
+
+        if "hotel_total_revenue_vs_ly" in latest.columns:
+            st.subheader("Hotel Total Revenue vs LY")
+            compare_bar = latest.set_index("hotel")["hotel_total_revenue_vs_ly"]
+            st.bar_chart(compare_bar)
+
+st.markdown("---")
+st.subheader("Графики по отелю")
+
+if history.empty:
+    st.write("Нет данных")
+else:
+    hotel_filter = st.selectbox(
+        "Выбери отель",
+        sorted(history["hotel"].dropna().unique().tolist())
+    )
+
+    filtered = history[history["hotel"] == hotel_filter].copy().sort_values("date")
+
+    if filtered.empty:
+        st.write("Нет данных по выбранному отелю")
+    else:
+        chart_metric = st.selectbox(
+            "Показатель",
+            [
+                "hotel_total_revenue_vs_ly",
+                "hotel_total_revenue_vs_budget",
+                "revpar_vs_ly",
+                "fb_total_revenue_vs_ly",
+                "service_hour_vs_ly",
+                "kitchen_hour_vs_ly",
+            ],
+            index=0
+        )
+
+        nice_names = {
+            "hotel_total_revenue_vs_ly": "Hotel Total Revenue vs LY",
+            "hotel_total_revenue_vs_budget": "Hotel Total Revenue vs Budget",
+            "revpar_vs_ly": "RevPAR vs LY",
+            "fb_total_revenue_vs_ly": "F&B Total Revenue vs LY",
+            "service_hour_vs_ly": "Service / wtrs. hour vs LY",
+            "kitchen_hour_vs_ly": "Kitchen / ktch. hour vs LY",
+        }
+
+        st.markdown(f"**{nice_names[chart_metric]}**")
+        st.line_chart(filtered.set_index("date")[chart_metric])
+
 st.markdown("---")
 st.subheader("Пополнить историю")
 
@@ -602,106 +782,43 @@ if uploaded_history:
         else:
             combined = pd.concat([current_history, uploaded_df], ignore_index=True)
 
-            if "date" in combined.columns and "hotel" in combined.columns:
-                combined = combined.drop_duplicates(
-                    subset=["date", "hotel"],
-                    keep="last"
-                )
+        if "date" in combined.columns and "hotel" in combined.columns:
+            combined = combined.drop_duplicates(
+                subset=["date", "hotel"],
+                keep="last"
+            )
 
-        save_full_history_to_google(combined)
+        ok = save_full_history_to_google(combined)
 
-        st.success("История успешно пополнена и сохранена в Google Sheets.")
+        if ok:
+            st.success("История успешно пополнена и сохранена в Google Sheets.")
+            history = load_history()
 
     except Exception as e:
         st.error(f"Ошибка при пополнении истории: {e}")
-        
-# =====================
-# GOOGLE SHEETS HISTORY
-# =====================
-import gspread
-from google.oauth2.service_account import Credentials
 
-SHEET_NAME = "history"
+st.markdown("---")
+st.subheader("История")
 
-def get_gsheet_client():
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
-    ]
+if history.empty:
+    st.write("Нет данных")
+else:
+    display_df = make_pretty_history(history)
+    st.dataframe(display_df, use_container_width=True)
 
-    creds = Credentials.from_service_account_info(
-        st.secrets["gcp_service_account"],
-        scopes=scopes
+    csv = history.to_csv(index=False).encode("utf-8-sig")
+    st.download_button(
+        label="📥 Скачать историю CSV",
+        data=csv,
+        file_name="chefbrain_history.csv",
+        mime="text/csv"
     )
 
-    return gspread.authorize(creds)
-
-def get_history_sheet():
-    client = get_gsheet_client()
-    sheet_id = st.secrets["GOOGLE_SHEET_ID"]
-    spreadsheet = client.open_by_key(sheet_id)
-
-    try:
-        worksheet = spreadsheet.worksheet(SHEET_NAME)
-    except gspread.WorksheetNotFound:
-        worksheet = spreadsheet.add_worksheet(title=SHEET_NAME, rows=1000, cols=50)
-
-    return worksheet
-
-def flatten_history_row(doc_date, hotel, data):
-    row = {"date": doc_date, "hotel": hotel}
-
-    for metric_key, values in data.items():
-        actual, budget, ly, vs_budget, vs_ly = values
-        row[f"{metric_key}_actual"] = actual
-        row[f"{metric_key}_budget"] = budget
-        row[f"{metric_key}_ly"] = ly
-        row[f"{metric_key}_vs_budget"] = vs_budget
-        row[f"{metric_key}_vs_ly"] = vs_ly
-
-    return row
-
-def load_history():
-    try:
-        worksheet = get_history_sheet()
-        records = worksheet.get_all_records()
-
-        if not records:
-            return pd.DataFrame()
-
-        return pd.DataFrame(records)
-
-    except Exception as e:
-        st.error(f"Ошибка чтения Google Sheets: {e}")
-        return pd.DataFrame()
-
-def save_history(doc_date, hotel, data):
-    new_row = flatten_history_row(doc_date, hotel, data)
-    new_df = pd.DataFrame([new_row])
-
-    history = load_history()
-
-    if history.empty:
-        final_df = new_df
-    else:
-        for col in new_df.columns:
-            if col not in history.columns:
-                history[col] = pd.NA
-
-        for col in history.columns:
-            if col not in new_df.columns:
-                new_df[col] = pd.NA
-
-        history = history[~((history["date"] == doc_date) & (history["hotel"] == hotel))]
-        final_df = pd.concat([history, new_df], ignore_index=True)
-
-    save_full_history_to_google(final_df)
-
-def save_full_history_to_google(df):
-    worksheet = get_history_sheet()
-
-    df = df.copy()
-    df = df.where(pd.notna(df), "")
-
-    worksheet.clear()
-    worksheet.update([df.columns.tolist()] + df.values.tolist())
+if os.path.exists(HISTORY_FILE_LOCAL_BACKUP):
+    with open(HISTORY_FILE_LOCAL_BACKUP, "rb") as f:
+        st.download_button(
+            "📥 Скачать старую локальную историю",
+            f,
+            file_name=HISTORY_FILE_LOCAL_BACKUP,
+            mime="text/csv"
+        )
