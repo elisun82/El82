@@ -584,130 +584,124 @@ if uploaded_file:
     show_metric_block(c5, "HOTEL TOTAL", "Total revenue", "hotel_total_revenue", data["hotel_total_revenue"])
      
 st.markdown("---")
-st.subheader("Сравнение отелей")
+st.subheader("Пополнить историю")
 
-history = load_history()
-if history.empty:
-    st.write("Нет данных")
-else:
-    latest = latest_rows_by_hotel(history)
+uploaded_history = st.file_uploader(
+    "Загрузи CSV с историей для добавления в Google Sheets",
+    type=["csv"],
+    key="history_upload"
+)
 
-    if latest.empty:
-        st.write("Недостаточно данных")
-    else:
-        render_kpi_dashboard(latest)
+if uploaded_history:
+    try:
+        uploaded_df = pd.read_csv(uploaded_history)
+        current_history = load_history()
 
-        compare_df = build_compare_table(latest)
-        st.dataframe(compare_df, use_container_width=True, hide_index=True)
+        if current_history.empty:
+            combined = uploaded_df
+        else:
+            combined = pd.concat([current_history, uploaded_df], ignore_index=True)
 
-        if "hotel_total_revenue_vs_ly" in latest.columns:
-            st.subheader("Hotel Total Revenue vs LY")
-            compare_bar = latest.set_index("hotel")["hotel_total_revenue_vs_ly"]
-            st.bar_chart(compare_bar)
+            if "date" in combined.columns and "hotel" in combined.columns:
+                combined = combined.drop_duplicates(
+                    subset=["date", "hotel"],
+                    keep="last"
+                )
 
-st.markdown("---")
-st.subheader("Графики по отелю")
+        save_full_history_to_google(combined)
 
-if history.empty:
-    st.write("Нет данных")
-else:
-    hotel_filter = st.selectbox(
-        "Выбери отель",
-        sorted(history["hotel"].dropna().unique().tolist())
+        st.success("История успешно пополнена и сохранена в Google Sheets.")
+
+    except Exception as e:
+        st.error(f"Ошибка при пополнении истории: {e}")
+        
+# =====================
+# GOOGLE SHEETS HISTORY
+# =====================
+import gspread
+from google.oauth2.service_account import Credentials
+
+SHEET_NAME = "history"
+
+def get_gsheet_client():
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
+
+    creds = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"],
+        scopes=scopes
     )
 
-    filtered = history[history["hotel"] == hotel_filter].copy().sort_values("date")
+    return gspread.authorize(creds)
 
-    if filtered.empty:
-        st.write("Нет данных по выбранному отелю")
+def get_history_sheet():
+    client = get_gsheet_client()
+    sheet_id = st.secrets["GOOGLE_SHEET_ID"]
+    spreadsheet = client.open_by_key(sheet_id)
+
+    try:
+        worksheet = spreadsheet.worksheet(SHEET_NAME)
+    except gspread.WorksheetNotFound:
+        worksheet = spreadsheet.add_worksheet(title=SHEET_NAME, rows=1000, cols=50)
+
+    return worksheet
+
+def flatten_history_row(doc_date, hotel, data):
+    row = {"date": doc_date, "hotel": hotel}
+
+    for metric_key, values in data.items():
+        actual, budget, ly, vs_budget, vs_ly = values
+        row[f"{metric_key}_actual"] = actual
+        row[f"{metric_key}_budget"] = budget
+        row[f"{metric_key}_ly"] = ly
+        row[f"{metric_key}_vs_budget"] = vs_budget
+        row[f"{metric_key}_vs_ly"] = vs_ly
+
+    return row
+
+def load_history():
+    try:
+        worksheet = get_history_sheet()
+        records = worksheet.get_all_records()
+
+        if not records:
+            return pd.DataFrame()
+
+        return pd.DataFrame(records)
+
+    except Exception as e:
+        st.error(f"Ошибка чтения Google Sheets: {e}")
+        return pd.DataFrame()
+
+def save_history(doc_date, hotel, data):
+    new_row = flatten_history_row(doc_date, hotel, data)
+    new_df = pd.DataFrame([new_row])
+
+    history = load_history()
+
+    if history.empty:
+        final_df = new_df
     else:
-        chart_metric = st.selectbox(
-            "Показатель",
-            [
-                "hotel_total_revenue_vs_ly",
-                "hotel_total_revenue_vs_budget",
-                "revpar_vs_ly",
-                "fb_total_revenue_vs_ly",
-                "service_hour_vs_ly",
-                "kitchen_hour_vs_ly",
-            ],
-            index=0
-        )
+        for col in new_df.columns:
+            if col not in history.columns:
+                history[col] = pd.NA
 
-        nice_names = {
-            "hotel_total_revenue_vs_ly": "Hotel Total Revenue vs LY",
-            "hotel_total_revenue_vs_budget": "Hotel Total Revenue vs Budget",
-            "revpar_vs_ly": "RevPAR vs LY",
-            "fb_total_revenue_vs_ly": "F&B Total Revenue vs LY",
-            "service_hour_vs_ly": "Service / wtrs. hour vs LY",
-            "kitchen_hour_vs_ly": "Kitchen / ktch. hour vs LY",
-        }
+        for col in history.columns:
+            if col not in new_df.columns:
+                new_df[col] = pd.NA
 
-        st.markdown(f"**{nice_names[chart_metric]}**")
-        st.line_chart(filtered.set_index("date")[chart_metric])
+        history = history[~((history["date"] == doc_date) & (history["hotel"] == hotel))]
+        final_df = pd.concat([history, new_df], ignore_index=True)
 
-st.markdown("---")
-st.subheader("История")
+    save_full_history_to_google(final_df)
 
-if history.empty:
-    st.write("Нет данных")
-else:
-    history_sorted = history.sort_values(["date", "hotel"]).copy()
+def save_full_history_to_google(df):
+    worksheet = get_history_sheet()
 
-    history_pretty = history_sorted.rename(columns={
-        "date": "Дата",
-        "hotel": "Отель",
+    df = df.copy()
+    df = df.where(pd.notna(df), "")
 
-        "hotel_total_revenue_actual": "Отель Факт",
-        "hotel_total_revenue_budget": "Отель Бюджет",
-        "hotel_total_revenue_ly": "Отель LY",
-        "hotel_total_revenue_vs_budget": "Отель vs Бюджет %",
-        "hotel_total_revenue_vs_ly": "Отель vs LY %",
-
-        "revpar_actual": "RevPAR Факт",
-        "revpar_budget": "RevPAR Бюджет",
-        "revpar_ly": "RevPAR LY",
-        "revpar_vs_budget": "RevPAR vs Бюджет %",
-        "revpar_vs_ly": "RevPAR vs LY %",
-
-        "fb_total_revenue_actual": "F&B Факт",
-        "fb_total_revenue_budget": "F&B Бюджет",
-        "fb_total_revenue_ly": "F&B LY",
-        "fb_total_revenue_vs_budget": "F&B vs Бюджет %",
-        "fb_total_revenue_vs_ly": "F&B vs LY %",
-
-        "service_hour_actual": "Сервис Факт",
-        "service_hour_budget": "Сервис Бюджет",
-        "service_hour_ly": "Сервис LY",
-        "service_hour_vs_budget": "Сервис vs Бюджет %",
-        "service_hour_vs_ly": "Сервис vs LY %",
-
-        "kitchen_hour_actual": "Кухня Факт",
-        "kitchen_hour_budget": "Кухня Бюджет",
-        "kitchen_hour_ly": "Кухня LY",
-        "kitchen_hour_vs_budget": "Кухня vs Бюджет %",
-        "kitchen_hour_vs_ly": "Кухня vs LY %",
-    })
-
-    display_df = history_pretty.copy()
-
-    for col in display_df.columns:
-        if "%" in col:
-            display_df[col] = display_df[col].apply(
-                lambda x: "—" if pd.isna(x) else f"{x:+.1f}%"
-            )
-        elif any(x in col for x in ["Факт", "Бюджет", "LY"]):
-            display_df[col] = display_df[col].apply(
-                lambda x: "—" if pd.isna(x) else f"{x:,.0f}".replace(",", " ")
-            )
-
-    st.dataframe(display_df, use_container_width=True)
-if not history.empty:
-    csv = history.to_csv(index=False).encode('utf-8')
-
-    st.download_button(
-        label="📥 Скачать историю CSV",
-        data=csv,
-        file_name="chefbrain_history.csv",
-        mime="text/csv"
-    )
+    worksheet.clear()
+    worksheet.update([df.columns.tolist()] + df.values.tolist())
