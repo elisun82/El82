@@ -599,6 +599,7 @@ if history.empty:
     st.write("Нет данных")
 else:
     history_chart = history.copy()
+    history_chart.columns = [str(c).strip() for c in history_chart.columns]
 
     history_chart["_date"] = pd.to_datetime(
         history_chart["date"],
@@ -606,53 +607,59 @@ else:
         utc=True
     )
 
-    history_chart = history_chart.dropna(subset=["_date"])
+    metric_options = {
+        "Hotel Total Revenue": "hotel_total_revenue_actual",
+        "RevPAR": "revpar_actual",
+        "F&B Total Revenue": "fb_total_revenue_actual",
+        "Service / wtrs. hour": "service_hour_actual",
+        "Kitchen / ktch. hour": "kitchen_hour_actual",
+    }
 
     hotel_filter = st.selectbox(
         "Выбери отель",
-        sorted(history_chart["hotel"].dropna().unique().tolist())
+        sorted(history_chart["hotel"].dropna().unique().tolist()),
+        key="chart_hotel_filter_v2"
     )
+
+    selected_metric_name = st.selectbox(
+        "Показатель",
+        list(metric_options.keys()),
+        index=0,
+        key="chart_metric_filter_v2"
+    )
+
+    chart_column = metric_options[selected_metric_name]
 
     filtered = history_chart[history_chart["hotel"] == hotel_filter].copy()
 
-    if filtered.empty:
-        st.write("Нет данных по выбранному отелю")
+    if chart_column not in filtered.columns:
+        st.error(f"Колонка не найдена: {chart_column}")
+        st.write("Доступные колонки:", list(filtered.columns))
     else:
-        metric_options = {
-            "Hotel Total Revenue": "hotel_total_revenue_actual",
-            "RevPAR": "revpar_actual",
-            "F&B Total Revenue": "fb_total_revenue_actual",
-            "Service / wtrs. hour": "service_hour_actual",
-            "Kitchen / ktch. hour": "kitchen_hour_actual",
-        }
-
-        selected_metric_name = st.selectbox(
-            "Показатель",
-            list(metric_options.keys()),
-            index=0
+        filtered[chart_column] = (
+            filtered[chart_column]
+            .astype(str)
+            .str.replace(" ", "", regex=False)
+            .str.replace(",", ".", regex=False)
         )
 
-        chart_column = metric_options[selected_metric_name]
+        filtered[chart_column] = pd.to_numeric(
+            filtered[chart_column],
+            errors="coerce"
+        )
 
-        if chart_column not in filtered.columns:
-            st.warning(f"Колонка {chart_column} не найдена в истории.")
+        chart_df = filtered[["_date", chart_column]].dropna().copy()
+        chart_df = chart_df.sort_values("_date")
+
+        if chart_df.empty:
+            st.warning(f"Нет числовых данных для графика: {selected_metric_name}")
+            st.write(filtered[["date", "hotel", chart_column]].tail(10))
         else:
-            filtered[chart_column] = pd.to_numeric(
-                filtered[chart_column],
-                errors="coerce"
-            )
+            chart_df = chart_df.set_index("_date")
+            chart_df = chart_df.rename(columns={chart_column: selected_metric_name})
 
-            chart_df = filtered[["_date", chart_column]].dropna().copy()
-            chart_df = chart_df.sort_values("_date")
-
-            if chart_df.empty:
-                st.warning(f"Нет числовых данных для показателя: {selected_metric_name}")
-            else:
-                chart_df = chart_df.set_index("_date")
-                chart_df = chart_df.rename(columns={chart_column: selected_metric_name})
-
-                st.markdown(f"**{selected_metric_name}**")
-                st.line_chart(chart_df)
+            st.markdown(f"**{selected_metric_name}**")
+            st.line_chart(chart_df)
 
 st.markdown("---")
 st.subheader("Пополнить историю")
