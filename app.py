@@ -813,8 +813,15 @@ else:
 
         if chart_column in filtered.columns:
             chart_df = filtered[["_date", chart_column]].dropna().copy()
-            chart_df["Дата"] = chart_df["_date"].dt.strftime("%d.%m.%y")
-            chart_df = chart_df.set_index("Дата")[[chart_column]]
+
+            # Важно: индекс оставляем датой, не текстом.
+            # Иначе график сортирует даты неправильно.
+            chart_df["_date"] = pd.to_datetime(chart_df["_date"], errors="coerce")
+            chart_df = chart_df.dropna(subset=["_date"])
+            chart_df = chart_df.sort_values("_date")
+
+            chart_df = chart_df.set_index("_date")[[chart_column]]
+            chart_df = chart_df.rename(columns={chart_column: nice_names[chart_metric_base]})
 
             st.markdown(f"**{nice_names[chart_metric_base]}**")
             st.line_chart(chart_df)
