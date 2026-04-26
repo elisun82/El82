@@ -763,7 +763,6 @@ else:
             "Показатель",
             [
                 "hotel_total_revenue_vs_ly",
-                "hotel_total_revenue_vs_budget",
                 "revpar_vs_ly",
                 "fb_total_revenue_vs_ly",
                 "service_hour_vs_ly",
@@ -774,7 +773,6 @@ else:
 
         nice_names = {
             "hotel_total_revenue_vs_ly": "Hotel Total Revenue vs LY",
-            "hotel_total_revenue_vs_budget": "Hotel Total Revenue vs Budget",
             "revpar_vs_ly": "RevPAR vs LY",
             "fb_total_revenue_vs_ly": "F&B Total Revenue vs LY",
             "service_hour_vs_ly": "Service / wtrs. hour vs LY",
