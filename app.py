@@ -870,32 +870,30 @@ if history.empty:
     st.write("Нет данных")
 else:
     history_for_display = history.copy()
-    history_for_display["_date"] = pd.to_datetime(history_for_display["date"], errors="coerce", utc=True)
-    history_for_display["_date_sort"] = history_for_display["_date"].astype("int64", errors="ignore")
-    history_for_display["_date_sort"] = pd.to_numeric(history_for_display["_date_sort"], errors="coerce").fillna(0)
 
-    history_for_display = history.copy()
+    # нормализация даты
+    history_for_display["_date"] = pd.to_datetime(
+        history_for_display["date"],
+        errors="coerce",
+        utc=True
+    )
 
-history_for_display["_date"] = pd.to_datetime(
-    history_for_display["date"],
-    errors="coerce",
-    utc=True
-)
+    # сортировка через YYYYMMDD (железно работает)
+    history_for_display["_date_sort"] = history_for_display["_date"].dt.strftime("%Y%m%d")
+    history_for_display["_date_sort"] = pd.to_numeric(
+        history_for_display["_date_sort"],
+        errors="coerce"
+    ).fillna(0)
 
-history_for_display["_date_sort"] = history_for_display["_date"].dt.strftime("%Y%m%d")
-history_for_display["_date_sort"] = pd.to_numeric(
-    history_for_display["_date_sort"],
-    errors="coerce"
-).fillna(0)
+    history_for_display = history_for_display.sort_values(
+        ["_date_sort", "hotel"],
+        ascending=[True, True]  # False если хочешь последние сверху
+    )
 
-history_for_display = history_for_display.sort_values(
-    ["_date_sort", "hotel"],
-    ascending=[True, True]
-)
-
+    # формирование красивой таблицы
     display_df = make_pretty_history(history_for_display)
-    st.dataframe(display_df, use_container_width=True)
 
+    st.dataframe(display_df, use_container_width=True)
     csv = history.to_csv(index=False).encode("utf-8-sig")
     st.download_button(
         label="📥 Скачать историю CSV",
