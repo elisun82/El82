@@ -1,190 +1,184 @@
 import os
 import re
 from datetime import datetime
-
 import pandas as pd
 import pdfplumber
 import requests
 import streamlit as st
-import plotly.express as px
 import plotly.graph_objects as go
 
 # --- Конфигурация ---
 HOTELS = ["PALACE BRIDGE", "OLYMPIA GARDEN", "VASILIEVSKY"]
-st.set_page_config(page_title="ChefBrain v4", layout="wide")
+st.set_page_config(page_title="ChefBrain Analytics v5", layout="wide")
 
 # --- Стилизация ---
 st.markdown("""
 <style>
-.block-container {padding-top:1rem; padding-bottom:2rem; max-width:1450px;}
+.block-container {padding-top:1rem; max-width:1400px;}
 .hero-box {
-    background: linear-gradient(180deg, #101828 0%, #0B1220 100%);
-    border: 1px solid rgba(255,255,255,0.06);
-    border-radius: 18px; padding: 18px 22px; margin-bottom: 16px;
+    background: linear-gradient(90deg, #1e293b 0%, #0f172a 100%);
+    padding: 20px; border-radius: 15px; margin-bottom: 20px; border: 1px solid #334155;
 }
-.hero-title {font-size:30px; font-weight:800; color:#F9FAFB;}
-.summary-box {border-radius:12px; padding:12px 14px; margin-bottom:10px; font-size:14px;}
-.small-note {font-size:11px; color:#94A3B8; margin-top:-4px;}
-.kpi-card {background:#111827; padding:15px; border-radius:15px; border:1px solid #374151; margin-bottom:10px;}
+.kpi-card {background:#1e293b; padding:15px; border-radius:12px; border:1px solid #334155;}
 </style>
 """, unsafe_allow_html=True)
 
-# --- Логика извлечения данных ---
-NUM_PATTERN = re.compile(r"[-+]?\d{1,3}(?:[ \u00A0]\d{3})*(?:[.,]\d+)?")
-
-def parse_number(s):
+# --- Улучшенная логика извлечения ---
+def clean_num(s):
     if not s: return None
-    s = s.replace("RUR", "").replace("%", "").replace("\xa0", "").replace(" ", "").replace(",", ".")
+    # Очистка от валют, мусора и спецсимволов
+    s = re.sub(r"[^0-9.,-]", "", s.replace("\xa0", "").replace(" ", ""))
+    if not s: return None
+    # Обработка европейского формата 1.234,56 или американского 1,234.56
+    if "," in s and "." in s: s = s.replace(",", "")
+    elif "," in s: s = s.replace(",", ".")
     try: return float(s)
     except: return None
 
-def extract_tokens(line: str):
-    return [m.group(0).strip() for m in NUM_PATTERN.finditer(line)]
+def get_numbers_from_text(text):
+    """Ищет все числа в строке, учитывая возможные пробелы-разделители."""
+    # Ищем группы цифр, которые могут быть разделены пробелом или точкой (разделитель тысяч)
+    pattern = r"[-+]?\d{1,3}(?:[ \u00A0.]\d{3})*(?:,\d+)?"
+    matches = re.findall(pattern, text)
+    return [clean_num(m) for m in matches if clean_num(m) is not None]
 
-def safe_pct(actual, reference):
-    if actual is None or reference is None or reference == 0: return None
-    return round((actual / reference - 1.0) * 100, 1)
-
-def extract_month_accum_values(line: str):
-    if not line: return [None]*5
-    tokens = extract_tokens(line)
-    # В отчете обычно 6 колонок: [Day Act, Day Bu, Day LY, MTD Act, MTD Bu, MTD LY]
-    # Берем с конца, чтобы не зависеть от мусора в начале строки
-    if len(tokens) >= 3:
-        # Индексы с конца: -3(Actual), -2(Budget), -1(LY)
-        actual = parse_number(tokens[-3])
-        budget = parse_number(tokens[-2])
-        ly = parse_number(tokens[-1])
-        return actual, budget, ly, safe_pct(actual, budget), safe_pct(actual, ly)
+def extract_mtd_values(lines, keyword, second_keyword=None):
+    """
+    Логика для Daily Revenue Report:
+    Обычно Accum Actual, Accum Budget и Accum LY идут в 4-й и 5-й колонках (блоках).
+    """
+    for line in lines:
+        if keyword.upper() in line.upper():
+            if second_keyword and second_keyword.upper() not in line.upper():
+                continue
+            
+            # В твоем PDF данные разделены на блоки (ячейки)
+            # Мы берем все числа из строки и пытаемся найти MTD-блок.
+            # В структуре отчета MTD обычно начинается с 5-го по 8-е число в ряду.
+            nums = get_numbers_from_text(line)
+            
+            if len(nums) >= 6:
+                # Стандартная структура для твоего PDF (Accum Actual, Accum Budget, Accum LY)
+                # Эти значения обычно находятся во второй половине списка чисел строки
+                act = nums[4] if len(nums) > 4 else None
+                bud = nums[5] if len(nums) > 5 else None
+                ly = nums[-1] if len(nums) > 0 else None 
+                
+                # Защита от попадания 'Daily' вместо 'Accum'
+                if act and act < 1000 and "Revenue" in keyword: # Если число слишком маленькое для выручки
+                    act = nums[len(nums)//2] 
+                
+                vs_bu = round((act/bud - 1)*100, 1) if act and bud else None
+                vs_ly = round((act/ly - 1)*100, 1) if act and ly else None
+                return [act, bud, ly, vs_bu, vs_ly]
     return [None]*5
 
-# --- Функции для работы с данными ---
+# --- Работа с Google Sheets (БД) ---
 def load_history():
     try:
         url = st.secrets["GOOGLE_SCRIPT_URL"]
-        resp = requests.get(url, params={"key": st.secrets["CHEFBRAIN_SECRET_KEY"]}, timeout=15)
+        resp = requests.get(url, params={"key": st.secrets["CHEFBRAIN_SECRET_KEY"]}, timeout=10)
         df = pd.DataFrame(resp.json().get("rows", []))
-        for col in df.columns:
-            if col not in ["date", "hotel"]: df[col] = pd.to_numeric(df[col], errors="coerce")
+        if not df.empty:
+            for col in df.columns:
+                if col not in ["date", "hotel"]: df[col] = pd.to_numeric(df[col], errors="coerce")
+            df["date"] = pd.to_datetime(df["date"])
         return df
     except: return pd.DataFrame()
 
-def save_history(doc_date, hotel, data):
-    row = {"date": doc_date, "hotel": hotel}
+def save_to_db(date, hotel, data):
+    row = {"date": date, "hotel": hotel}
     for k, v in data.items():
         row.update({f"{k}_actual": v[0], f"{k}_budget": v[1], f"{k}_ly": v[2], f"{k}_vs_budget": v[3], f"{k}_vs_ly": v[4]})
-    history = load_history()
-    new_row = pd.DataFrame([row])
-    if not history.empty:
-        history = history[~((history["date"].astype(str) == str(doc_date)) & (history["hotel"] == hotel))]
-        final_df = pd.concat([history, new_row], ignore_index=True)
-    else: final_df = new_row
-    payload = {"key": st.secrets["CHEFBRAIN_SECRET_KEY"], "rows": final_df.where(pd.notna(final_df), None).to_dict(orient="records")}
-    requests.post(st.secrets["GOOGLE_SCRIPT_URL"], json=payload, timeout=20)
-
-# --- Визуализация ---
-def fmt_val(v): return f"{v:,.0f}".replace(",", " ") if v is not None else "нет данных"
-def fmt_p(v): return f"{v:+.1f}%" if v is not None else "—"
-
-def render_metric_card(col, title, sub, values):
-    act, bu, ly, v_bu, v_ly = values
-    with col:
-        st.markdown(f"**{title}**")
-        st.markdown(f"<div class='small-note'>{sub}</div>", unsafe_allow_html=True)
-        st.metric(label="Actual", value=fmt_val(act))
-        c_bu = "#EF4444" if (v_bu or 0) < 0 else "#22C55E"
-        c_ly = "#EF4444" if (v_ly or 0) < 0 else "#22C55E"
-        st.markdown(f"<div style='font-size:13px;'>vs Bu: <span style='color:{c_bu}; font-weight:bold;'>{fmt_p(v_bu)}</span></div>", unsafe_allow_html=True)
-        st.markdown(f"<div style='font-size:13px;'>vs LY: <span style='color:{c_ly}; font-weight:bold;'>{fmt_p(v_ly)}</span></div>", unsafe_allow_html=True)
-        st.markdown(f"<div class='small-note'>Bu: {fmt_val(bu)} | LY: {fmt_val(ly)}</div>", unsafe_allow_html=True)
-
-# --- Main App ---
-st.markdown('<div class="hero-box"><div class="hero-title">ChefBrain Analytics</div></div>', unsafe_allow_html=True)
-
-uploaded = st.file_uploader("Загрузить отчет PDF", type="pdf")
-if uploaded:
-    with pdfplumber.open(uploaded) as pdf:
-        text = "\n".join([p.extract_text() or "" for p in pdf.pages])
     
-    # Очень простой поиск даты и отеля
-    doc_date = datetime.now().strftime("%Y-%m-%d") # Упростим для теста, в коде выше есть поиск
-    hotel = "UNKNOWN"
-    for h in HOTELS: 
-        if h in text.upper(): hotel = h
-    
-    # Парсинг секций
-    lines = text.splitlines()
+    payload = {"key": st.secrets["CHEFBRAIN_SECRET_KEY"], "rows": [row]}
+    try: requests.post(st.secrets["GOOGLE_SCRIPT_URL"], json=payload, timeout=15)
+    except: st.error("Ошибка сохранения в базу")
+
+# --- Интерфейс ---
+st.markdown('<div class="hero-box"><h1 style="margin:0; color:white;">ChefBrain Analytics v5.0</h1></div>', unsafe_allow_html=True)
+
+uploaded_file = st.file_uploader("Загрузи Daily Revenue Report (PDF)", type="pdf")
+
+if uploaded_file:
+    with pdfplumber.open(uploaded_file) as pdf:
+        # Извлекаем текст, сохраняя структуру колонок насколько возможно
+        text_pages = [page.extract_text(layout=True) for page in pdf.pages]
+        full_text = "\n".join(text_pages)
+        lines = full_text.splitlines()
+
+    # Парсинг заголовка
+    hotel = next((h for h in HOTELS if h in full_text.upper()), "UNKNOWN")
+    date_match = re.search(r"(\d{2})[./](\d{2})[./](\d{4})", full_text)
+    doc_date = f"{date_match.group(3)}-{date_match.group(2)}-{date_match.group(1)}" if date_match else datetime.now().strftime("%Y-%m-%d")
+
+    # Извлечение KPI (с учетом специфики твоего PDF)
     data = {
-        "revpar": extract_month_accum_values(next((l for l in lines if "RevPAR" in l), "")),
-        "fb_total_revenue": extract_month_accum_values(next((l for l in lines if "Total F&B" in l and "Revenue" in l), "")),
-        "service_hour": extract_month_accum_values(next((l for l in lines if "Wtrs" in l and "Hour" in l), "")),
-        "kitchen_hour": extract_month_accum_values(next((l for l in lines if "Ktch" in l and "Hour" in l), "")),
-        "hotel_total_revenue": extract_month_accum_values(next((l for l in lines if "Hotel Total" in l and "Revenue" in l), ""))
+        "revpar": extract_mtd_values(lines, "RevPAR"),
+        "fb_total_revenue": extract_mtd_values(lines, "Tokal revenue", "Food"), # Ищем Total Revenue именно в блоке F&B
+        "service_hour": extract_mtd_values(lines, "Rev/wtrs. Hoor"),
+        "kitchen_hour": extract_mtd_values(lines, "Rev/koch. hour"),
+        "hotel_total_revenue": extract_mtd_values(lines, "Total revenue", "Hours") # Общая выручка отеля
     }
-    
-    save_history(doc_date, hotel, data)
-    
-    st.subheader(f"Результаты: {hotel} ({doc_date})")
-    cols = st.columns(5)
-    render_metric_card(cols[0], "ACCOMM.", "RevPAR", data["revpar"])
-    render_metric_card(cols[1], "F&B", "Total Revenue", data["fb_total_revenue"])
-    render_metric_card(cols[2], "SERVICE", "Rev/Hour", data["service_hour"])
-    render_metric_card(cols[3], "KITCHEN", "Rev/Hour", data["kitchen_hour"])
-    render_metric_card(cols[4], "TOTAL", "Total Revenue", data["hotel_total_revenue"])
 
-# --- Секция истории ---
+    save_to_db(doc_date, hotel, data)
+    
+    st.success(f"Данные за {doc_date} ({hotel}) успешно обработаны!")
+
+    # Виджеты KPI
+    cols = st.columns(5)
+    metrics_labels = [("RevPAR", "revpar"), ("F&B Rev", "fb_total_revenue"), ("Service", "service_hour"), ("Kitchen", "kitchen_hour"), ("Total Rev", "hotel_total_revenue")]
+    
+    for i, (label, key) in enumerate(metrics_labels):
+        vals = data[key]
+        with cols[i]:
+            st.metric(label, f"{vals[0]:,.0f}".replace(",", " ") if vals[0] else "—", 
+                      delta=f"{vals[4]:+.1f}% vs LY" if vals[4] else None)
+            st.caption(f"Budget: {vals[1]:,.0f}".replace(",", " ") if vals[1] else "")
+
+# --- Аналитика и Графики ---
 history = load_history()
 if not history.empty:
-    st.markdown("---")
-    st.subheader("Сравнение отелей")
+    st.divider()
     
-    latest = history.sort_values("date").groupby("hotel").last().reset_index()
-    cols_h = st.columns(len(latest))
-    for i, (_, row) in enumerate(latest.iterrows()):
-        with cols_h[i]:
-            v_ly = row.get("hotel_total_revenue_vs_ly")
-            color = "#EF4444" if (v_ly or 0) < 0 else "#22C55E"
+    col_l, col_r = st.columns([1, 3])
+    with col_l:
+        st.subheader("Сравнение")
+        latest = history.sort_values("date").groupby("hotel").last().reset_index()
+        for _, row in latest.iterrows():
+            v = row.get("hotel_total_revenue_vs_ly", 0)
+            color = "#22c55e" if v > 0 else "#ef4444"
             st.markdown(f"""
-            <div class="kpi-card">
-                <div style="color:#9CA3AF; font-size:12px;">{row['hotel']}</div>
-                <div style="font-size:22px; font-weight:bold; color:{color};">{fmt_p(v_ly)}</div>
-                <div style="font-size:11px; color:#6B7280;">vs Last Year (Total)</div>
+            <div class="kpi-card" style="margin-bottom:10px;">
+                <div style="font-size:0.8rem; color:#94a3b8;">{row['hotel']}</div>
+                <div style="font-size:1.2rem; font-weight:bold; color:{color};">{v:+.1f}% <span style="font-size:0.7rem; color:#94a3b8;">vs LY</span></div>
             </div>
             """, unsafe_allow_html=True)
 
-    st.subheader("Тренды показателей")
-    h_plot = history.copy()
-    h_plot["date"] = pd.to_datetime(h_plot["date"])
-    h_plot = h_plot.sort_values("date")
+    with col_r:
+        st.subheader("Тренды показателей")
+        target_hotel = st.selectbox("Выберите отель", history["hotel"].unique())
+        metric_choice = st.selectbox("Показатель", ["hotel_total_revenue_actual", "revpar_actual", "fb_total_revenue_actual"])
+        
+        df_plot = history[history["hotel"] == target_hotel].sort_values("date")
+        
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=df_plot["date"], y=df_plot[metric_choice],
+            mode='lines+markers',
+            line=dict(shape='spline', smoothing=1.3, width=3, color='#3b82f6'),
+            marker=dict(size=7),
+            name="Actual"
+        ))
+        
+        fig.update_layout(
+            template="plotly_dark",
+            height=400,
+            margin=dict(l=10, r=10, t=30, b=10),
+            xaxis=dict(rangeslider=dict(visible=True), type='date'),
+            yaxis=dict(autorange=True, fixedrange=False, gridcolor="#334155")
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-    target_hotel = st.selectbox("Отель", h_plot["hotel"].unique())
-    target_metric = st.selectbox("Показатель", [
-        "hotel_total_revenue_actual", "revpar_actual", "fb_total_revenue_actual", 
-        "service_hour_actual", "kitchen_hour_actual"
-    ])
-
-    df_filtered = h_plot[h_plot["hotel"] == target_hotel]
-    
-    # Построение плавного графика через Plotly
-    fig = px.line(df_filtered, x="date", y=target_metric, 
-                  title=f"Динамика {target_metric}",
-                  render_mode="svg") # Для плавности
-    
-    fig.update_traces(line_shape='spline', line_smoothing=1.3, line_width=3, marker=dict(size=8))
-    
-    fig.update_layout(
-        hovermode="x unified",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        xaxis=dict(
-            showgrid=False, 
-            rangeslider=dict(visible=True), # Возможность менять масштаб
-            type='date'
-        ),
-        yaxis=dict(autorange=True, fixedrange=False, showgrid=True, gridcolor="#374151") # Автоподстройка
-    )
-    
-    st.plotly_chart(fig, use_container_width=True)
-
-    with st.expander("Посмотреть сырые данные таблицы"):
-        st.dataframe(history)
+    with st.expander("Просмотр сырых данных (база)"):
+        st.dataframe(history.sort_values("date", ascending=False))
