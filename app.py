@@ -97,11 +97,14 @@ DATE_PATTERNS = [
     re.compile(r"\b(\d{4}-\d{2}-\d{2})\b"),
 ]
 
+
 def normalize_spaces(text: str) -> str:
     return re.sub(r"[ \t]+", " ", text or "")
 
+
 def split_lines(text: str):
     return [line.strip() for line in text.splitlines() if line.strip()]
+
 
 def detect_hotel(text: str) -> str:
     upper = text.upper()
@@ -109,6 +112,7 @@ def detect_hotel(text: str) -> str:
         if hotel in upper:
             return hotel
     return "UNKNOWN"
+
 
 def parse_number(value):
     if value is None:
@@ -147,6 +151,7 @@ def parse_number(value):
     except Exception:
         return None
 
+
 def extract_tokens(line: str):
     cleaned = (
         line.replace("RUR", "")
@@ -156,25 +161,42 @@ def extract_tokens(line: str):
     )
     return [m.group(0).strip() for m in NUM_PATTERN.finditer(cleaned)]
 
+
 def safe_pct(actual, reference):
     if actual is None or reference is None or reference == 0:
         return None
     return round((actual / reference - 1.0) * 100, 1)
+
 
 def format_value(metric_name: str, value):
     if value is None or pd.isna(value):
         return "нет данных"
     return f"{value:,.0f}".replace(",", " ")
 
+
 def format_pct(value):
     if value is None or pd.isna(value):
         return "нет данных"
     return f"{value:+.1f}%"
 
+
 def fmt_pct(x):
     if pd.isna(x):
         return "—"
     return f"{x:+.1f}%"
+
+
+def fmt_date(value):
+    if value is None or pd.isna(value):
+        return "—"
+
+    dt = pd.to_datetime(value, errors="coerce", utc=True)
+
+    if pd.isna(dt):
+        return str(value)
+
+    return dt.strftime("%d.%m.%y")
+
 
 def get_color_for_delta(value):
     if value is None or pd.isna(value):
@@ -184,6 +206,7 @@ def get_color_for_delta(value):
     if value == 0:
         return "#F59E0B"
     return "#22C55E"
+
 
 def get_section_lines(text, start_keywords, end_keywords=None):
     lines = split_lines(text)
@@ -208,6 +231,7 @@ def get_section_lines(text, start_keywords, end_keywords=None):
 
     return lines[start_idx:]
 
+
 def find_first_line(lines, includes=None, startswith=None):
     includes = [x.lower() for x in (includes or [])]
     startswith = startswith.lower() if startswith else None
@@ -220,6 +244,7 @@ def find_first_line(lines, includes=None, startswith=None):
             continue
         return line
     return None
+
 
 def extract_month_accum_values(line: str):
     if not line:
@@ -239,6 +264,7 @@ def extract_month_accum_values(line: str):
 
     return actual, budget, ly, vs_budget, vs_ly
 
+
 def extract_doc_date(first_page_text: str):
     lines = split_lines(first_page_text)
     header_lines = lines[:8]
@@ -255,6 +281,7 @@ def extract_doc_date(first_page_text: str):
                         pass
 
     return datetime.now().strftime("%Y-%m-%d")
+
 
 # =====================
 # PARSER
@@ -299,6 +326,7 @@ def parse_pdf(file):
 
     return doc_date, hotel, data
 
+
 # =====================
 # GOOGLE APPS SCRIPT HISTORY
 # =====================
@@ -315,11 +343,14 @@ def flatten_history_row(doc_date, hotel, data):
 
     return row
 
+
 def get_script_url():
     return st.secrets["GOOGLE_SCRIPT_URL"]
 
+
 def get_secret_key():
     return st.secrets["CHEFBRAIN_SECRET_KEY"]
+
 
 def load_history():
     try:
@@ -347,11 +378,15 @@ def load_history():
             if col not in ["date", "hotel"]:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
 
+        if "date" in df.columns:
+            df["date"] = df["date"].astype(str)
+
         return df
 
     except Exception as e:
         st.error(f"Ошибка чтения истории из Google Sheets: {e}")
         return pd.DataFrame()
+
 
 def save_full_history_to_google(df):
     try:
@@ -382,6 +417,7 @@ def save_full_history_to_google(df):
         st.error(f"Ошибка записи истории в Google Sheets: {e}")
         return False
 
+
 def save_history(doc_date, hotel, data):
     new_row = flatten_history_row(doc_date, hotel, data)
     new_df = pd.DataFrame([new_row])
@@ -399,13 +435,14 @@ def save_history(doc_date, hotel, data):
             if col not in new_df.columns:
                 new_df[col] = pd.NA
 
-        history = history[~((history["date"] == doc_date) & (history["hotel"] == hotel))]
+        history = history[~((history["date"].astype(str) == str(doc_date)) & (history["hotel"] == hotel))]
         final_df = pd.concat([history, new_df], ignore_index=True)
 
     ok = save_full_history_to_google(final_df)
 
     if ok:
         st.success("История сохранена в Google Sheets.")
+
 
 def latest_rows_by_hotel(df):
     if df.empty:
@@ -416,25 +453,27 @@ def latest_rows_by_hotel(df):
     if "date" not in df.columns or "hotel" not in df.columns:
         return pd.DataFrame()
 
-    df["date"] = df["date"].astype(str)
+    df["date"] = df["date"].astype(str).str.strip()
 
     df["_date_sort"] = pd.to_datetime(
         df["date"],
         errors="coerce",
-        dayfirst=False
+        utc=True
     )
 
-    df["_date_sort"] = df["_date_sort"].fillna(pd.Timestamp("1900-01-01"))
+    df["_date_sort_int"] = df["_date_sort"].astype("int64", errors="ignore")
+    df["_date_sort_int"] = pd.to_numeric(df["_date_sort_int"], errors="coerce").fillna(0)
 
     latest = (
-        df.sort_values("_date_sort")
+        df.sort_values("_date_sort_int")
           .groupby("hotel", as_index=False)
           .tail(1)
           .sort_values("hotel")
-          .drop(columns=["_date_sort"])
+          .drop(columns=["_date_sort", "_date_sort_int"])
     )
 
     return latest
+
 
 # =====================
 # SUMMARY
@@ -485,6 +524,7 @@ def build_summary(data):
 
     return notes
 
+
 def build_alerts(data):
     alerts = []
 
@@ -518,6 +558,7 @@ def build_alerts(data):
 
     return alerts
 
+
 def render_summary_block(notes):
     if not notes:
         return
@@ -541,6 +582,7 @@ def render_summary_block(notes):
             unsafe_allow_html=True
         )
 
+
 def render_alert_block(alerts):
     st.subheader("Красные зоны")
 
@@ -551,6 +593,7 @@ def render_alert_block(alerts):
             st.markdown(f"<div class='kpi-caution'>{text}</div>", unsafe_allow_html=True)
         else:
             st.markdown(f"<div class='kpi-good'>{text}</div>", unsafe_allow_html=True)
+
 
 # =====================
 # UI HELPERS
@@ -577,12 +620,13 @@ def show_metric_block(col, section_name, title, metric_name, values):
             unsafe_allow_html=True
         )
 
+
 def build_compare_table(latest):
     rows = []
     for _, row in latest.iterrows():
         rows.append({
             "Hotel": row["hotel"],
-            "Date": row["date"],
+            "Date": fmt_date(row["date"]),
             "Hotel Total % LY": row.get("hotel_total_revenue_vs_ly"),
             "Hotel Total % Bu": row.get("hotel_total_revenue_vs_budget"),
             "RevPAR % LY": row.get("revpar_vs_ly"),
@@ -591,6 +635,7 @@ def build_compare_table(latest):
             "Kitchen % LY": row.get("kitchen_hour_vs_ly"),
         })
     return pd.DataFrame(rows)
+
 
 def get_status_badge(row):
     checks = [
@@ -611,6 +656,7 @@ def get_status_badge(row):
         return "Рост", "#166534", "#DCFCE7"
     return "Норма", "#1D4ED8", "#DBEAFE"
 
+
 def render_kpi_dashboard(latest_df):
     st.subheader("KPI-дэшборд")
 
@@ -618,10 +664,11 @@ def render_kpi_dashboard(latest_df):
 
     for i, (_, row) in enumerate(latest_df.iterrows()):
         status_text, status_color, status_bg = get_status_badge(row)
+        date_text = fmt_date(row["date"])
 
         card_html = f"""<div style="border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 16px; background: linear-gradient(180deg, #111827 0%, #0B1220 100%); min-height: 220px; margin-bottom: 14px;">
 <div style="font-size: 20px; font-weight: 800; color: #F9FAFB; margin-bottom: 4px;">{row["hotel"]}</div>
-<div style="font-size: 12px; color: #9CA3AF; margin-bottom: 10px;">Дата: {row["date"]}</div>
+<div style="font-size: 12px; color: #9CA3AF; margin-bottom: 10px;">Дата: {date_text}</div>
 <div style="display: inline-block; padding: 6px 10px; border-radius: 999px; background: {status_bg}; color: {status_color}; font-size: 12px; font-weight: 700; margin-bottom: 14px;">{status_text}</div>
 <div style="font-size: 13px; color: #9CA3AF;">Отель vs LY</div>
 <div style="font-size: 22px; font-weight: 800; color: #F9FAFB; margin-bottom: 8px;">{fmt_pct(row.get("hotel_total_revenue_vs_ly"))}</div>
@@ -636,60 +683,45 @@ def render_kpi_dashboard(latest_df):
         with cols[i % 3]:
             st.markdown(card_html, unsafe_allow_html=True)
 
+
 def make_pretty_history(history):
-    history_for_display = history.copy()
-    history_for_display["date"] = history_for_display["date"].astype(str)
+    history = history.copy()
 
-    history_sorted = history_for_display.sort_values(["date", "hotel"]).copy()
+    history["Дата"] = history["date"].apply(fmt_date)
+    history["Отель"] = history["hotel"]
 
-    history_pretty = history_sorted.rename(columns={
-        "date": "Дата",
-        "hotel": "Отель",
+    display_df = pd.DataFrame({
+        "Дата": history["Дата"],
+        "Отель": history["Отель"],
 
-        "hotel_total_revenue_actual": "Отель Факт",
-        "hotel_total_revenue_budget": "Отель Бюджет",
-        "hotel_total_revenue_ly": "Отель LY",
-        "hotel_total_revenue_vs_budget": "Отель vs Бюджет %",
-        "hotel_total_revenue_vs_ly": "Отель vs LY %",
+        "Отель Факт": history.get("hotel_total_revenue_actual"),
+        "Отель vs LY %": history.get("hotel_total_revenue_vs_ly"),
 
-        "revpar_actual": "RevPAR Факт",
-        "revpar_budget": "RevPAR Бюджет",
-        "revpar_ly": "RevPAR LY",
-        "revpar_vs_budget": "RevPAR vs Бюджет %",
-        "revpar_vs_ly": "RevPAR vs LY %",
+        "RevPAR Факт": history.get("revpar_actual"),
+        "RevPAR vs LY %": history.get("revpar_vs_ly"),
 
-        "fb_total_revenue_actual": "F&B Факт",
-        "fb_total_revenue_budget": "F&B Бюджет",
-        "fb_total_revenue_ly": "F&B LY",
-        "fb_total_revenue_vs_budget": "F&B vs Бюджет %",
-        "fb_total_revenue_vs_ly": "F&B vs LY %",
+        "F&B Факт": history.get("fb_total_revenue_actual"),
+        "F&B vs LY %": history.get("fb_total_revenue_vs_ly"),
 
-        "service_hour_actual": "Сервис Факт",
-        "service_hour_budget": "Сервис Бюджет",
-        "service_hour_ly": "Сервис LY",
-        "service_hour_vs_budget": "Сервис vs Бюджет %",
-        "service_hour_vs_ly": "Сервис vs LY %",
+        "Сервис Факт": history.get("service_hour_actual"),
+        "Сервис vs LY %": history.get("service_hour_vs_ly"),
 
-        "kitchen_hour_actual": "Кухня Факт",
-        "kitchen_hour_budget": "Кухня Бюджет",
-        "kitchen_hour_ly": "Кухня LY",
-        "kitchen_hour_vs_budget": "Кухня vs Бюджет %",
-        "kitchen_hour_vs_ly": "Кухня vs LY %",
+        "Кухня Факт": history.get("kitchen_hour_actual"),
+        "Кухня vs LY %": history.get("kitchen_hour_vs_ly"),
     })
-
-    display_df = history_pretty.copy()
 
     for col in display_df.columns:
         if "%" in col:
             display_df[col] = display_df[col].apply(
                 lambda x: "—" if pd.isna(x) else f"{x:+.1f}%"
             )
-        elif any(x in col for x in ["Факт", "Бюджет", "LY"]):
+        elif "Факт" in col:
             display_df[col] = display_df[col].apply(
                 lambda x: "—" if pd.isna(x) else f"{x:,.0f}".replace(",", " ")
             )
 
     return display_df
+
 
 # =====================
 # UI
@@ -707,7 +739,7 @@ if uploaded_file:
     doc_date, hotel, data = parse_pdf(uploaded_file)
     save_history(doc_date, hotel, data)
 
-    st.subheader(f"Отель: {hotel} · Дата документа: {doc_date}")
+    st.subheader(f"Отель: {hotel} · Дата документа: {fmt_date(doc_date)}")
 
     c1, c2, c3, c4, c5 = st.columns(5)
 
@@ -738,11 +770,6 @@ else:
         compare_df = build_compare_table(latest)
         st.dataframe(compare_df, use_container_width=True, hide_index=True)
 
-        if "hotel_total_revenue_vs_ly" in latest.columns:
-            st.subheader("Hotel Total Revenue vs LY")
-            compare_bar = latest.set_index("hotel")["hotel_total_revenue_vs_ly"]
-            st.bar_chart(compare_bar)
-
 st.markdown("---")
 st.subheader("Графики по отелю")
 
@@ -754,33 +781,45 @@ else:
         sorted(history["hotel"].dropna().unique().tolist())
     )
 
-    filtered = history[history["hotel"] == hotel_filter].copy().sort_values("date")
+    filtered = history[history["hotel"] == hotel_filter].copy()
 
     if filtered.empty:
         st.write("Нет данных по выбранному отелю")
     else:
-        chart_metric = st.selectbox(
+        filtered["_date"] = pd.to_datetime(filtered["date"], errors="coerce", utc=True)
+        filtered = filtered.sort_values("_date")
+
+        chart_metric_base = st.selectbox(
             "Показатель",
             [
-                "hotel_total_revenue_vs_ly",
-                "revpar_vs_ly",
-                "fb_total_revenue_vs_ly",
-                "service_hour_vs_ly",
-                "kitchen_hour_vs_ly",
+                "hotel_total_revenue",
+                "revpar",
+                "fb_total_revenue",
+                "service_hour",
+                "kitchen_hour",
             ],
             index=0
         )
 
+        chart_column = f"{chart_metric_base}_actual"
+
         nice_names = {
-            "hotel_total_revenue_vs_ly": "Hotel Total Revenue vs LY",
-            "revpar_vs_ly": "RevPAR vs LY",
-            "fb_total_revenue_vs_ly": "F&B Total Revenue vs LY",
-            "service_hour_vs_ly": "Service / wtrs. hour vs LY",
-            "kitchen_hour_vs_ly": "Kitchen / ktch. hour vs LY",
+            "hotel_total_revenue": "Hotel Total Revenue",
+            "revpar": "RevPAR",
+            "fb_total_revenue": "F&B Total Revenue",
+            "service_hour": "Service / wtrs. hour",
+            "kitchen_hour": "Kitchen / ktch. hour",
         }
 
-        st.markdown(f"**{nice_names[chart_metric]}**")
-        st.line_chart(filtered.set_index("date")[chart_metric])
+        if chart_column in filtered.columns:
+            chart_df = filtered[["_date", chart_column]].dropna().copy()
+            chart_df["Дата"] = chart_df["_date"].dt.strftime("%d.%m.%y")
+            chart_df = chart_df.set_index("Дата")[[chart_column]]
+
+            st.markdown(f"**{nice_names[chart_metric_base]}**")
+            st.line_chart(chart_df)
+        else:
+            st.write("Нет данных по выбранному показателю")
 
 st.markdown("---")
 st.subheader("Пополнить историю")
@@ -802,6 +841,7 @@ if uploaded_history:
             combined = pd.concat([current_history, uploaded_df], ignore_index=True)
 
         if "date" in combined.columns and "hotel" in combined.columns:
+            combined["date"] = combined["date"].astype(str)
             combined = combined.drop_duplicates(
                 subset=["date", "hotel"],
                 keep="last"
@@ -822,7 +862,14 @@ st.subheader("История")
 if history.empty:
     st.write("Нет данных")
 else:
-    display_df = make_pretty_history(history)
+    history_for_display = history.copy()
+    history_for_display["_date"] = pd.to_datetime(history_for_display["date"], errors="coerce", utc=True)
+    history_for_display["_date_sort"] = history_for_display["_date"].astype("int64", errors="ignore")
+    history_for_display["_date_sort"] = pd.to_numeric(history_for_display["_date_sort"], errors="coerce").fillna(0)
+
+    history_for_display = history_for_display.sort_values(["_date_sort", "hotel"])
+
+    display_df = make_pretty_history(history_for_display)
     st.dataframe(display_df, use_container_width=True)
 
     csv = history.to_csv(index=False).encode("utf-8-sig")
@@ -839,13 +886,5 @@ if os.path.exists(HISTORY_FILE_LOCAL_BACKUP):
             "📥 Скачать старую локальную историю",
             f,
             file_name=HISTORY_FILE_LOCAL_BACKUP,
-            mime="text/csv"
-        )
-if os.path.exists("history_accum_v3.csv"):
-    with open("history_accum_v3.csv", "rb") as f:
-        st.download_button(
-            "Скачать старую локальную историю",
-            f,
-            file_name="history_accum_v3.csv",
             mime="text/csv"
         )
