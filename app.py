@@ -608,7 +608,9 @@ else:
     if filtered.empty:
         st.write("Нет данных по выбранному отелю")
     else:
+        # Парсим дату и убираем timezone для совместимости с st.line_chart
         filtered["_date"] = pd.to_datetime(filtered["date"], errors="coerce", utc=True)
+        filtered["_date"] = filtered["_date"].dt.tz_localize(None)  # <-- FIX
         filtered = filtered.dropna(subset=["_date"]).sort_values("_date")
 
         chart_metric_base = st.selectbox(
@@ -633,16 +635,27 @@ else:
             "kitchen_hour": "Kitchen / ktch. hour",
         }
 
-        if chart_column in filtered.columns:
-            chart_df = filtered[["_date", chart_column]].dropna().copy()
-            chart_df = chart_df.sort_values("_date")
-            chart_df = chart_df.set_index("_date")[[chart_column]]
-            chart_df = chart_df.rename(columns={chart_column: nice_names[chart_metric_base]})
-
-            st.markdown(f"**{nice_names[chart_metric_base]}**")
-            st.line_chart(chart_df)
+        if chart_column not in filtered.columns:
+            st.warning(f"Колонка {chart_column} отсутствует в данных.")
+            st.write("Доступные колонки:", filtered.columns.tolist())
         else:
-            st.write("Нет данных по выбранному показателю")
+            chart_df = filtered[["_date", chart_column]].copy()
+            # Принудительно конвертируем в float
+            chart_df[chart_column] = pd.to_numeric(chart_df[chart_column], errors="coerce")
+            chart_df = chart_df.dropna(subset=[chart_column])
+
+            if chart_df.empty:
+                st.warning("Нет числовых данных для построения графика.")
+            else:
+                chart_df = chart_df.sort_values("_date").set_index("_date")
+                chart_df = chart_df.rename(columns={chart_column: nice_names[chart_metric_base]})
+
+                st.markdown(f"**{nice_names[chart_metric_base]}**")
+                try:
+                    st.line_chart(chart_df)
+                except Exception as e:
+                    st.error(f"Ошибка рендера графика: {e}")
+                    st.dataframe(chart_df.reset_index())
 
 st.markdown("---")
 st.subheader("Пополнить историю")
