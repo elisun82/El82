@@ -33,6 +33,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 NUM_PATTERN = re.compile(r"\d{1,3}(?:[ \u00A0]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?")
+
 DATE_PATTERNS = [
     re.compile(r"\b(\d{2}\.\d{2}\.\d{4})\b"),
     re.compile(r"\b(\d{2}/\d{2}/\d{4})\b"),
@@ -42,6 +43,14 @@ DATE_PATTERNS = [
 
 def normalize_spaces(text: str) -> str:
     return re.sub(r"[ \t]+", " ", text or "")
+
+
+def normalize_search_text(text: str) -> str:
+    text = str(text or "").lower()
+    text = text.replace(".", " ")
+    text = re.sub(r"[^a-zа-я0-9%/ ]+", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
 
 
 def split_lines(text: str):
@@ -59,23 +68,35 @@ def detect_hotel(text: str) -> str:
 def parse_number(value):
     if value is None:
         return None
+
     s = str(value).replace("RUR", "").replace("%", "").replace("\xa0", " ").strip()
+
     if " " in s and "," not in s and "." not in s:
         try:
             return float(s.replace(" ", ""))
         except Exception:
             return None
+
     if "," in s and "." not in s:
         parts = s.split(",")
+
         if len(parts) > 1 and all(p.isdigit() for p in parts) and all(len(p) == 3 for p in parts[1:]):
             try:
                 return float("".join(parts))
             except Exception:
                 return None
+
         try:
             return float(s.replace(",", "."))
         except Exception:
             return None
+
+    if "," in s and "." in s:
+        try:
+            return float(s.replace(",", ""))
+        except Exception:
+            return None
+
     try:
         return float(s)
     except Exception:
@@ -83,7 +104,13 @@ def parse_number(value):
 
 
 def extract_tokens(line: str):
-    cleaned = line.replace("RUR", "").replace("%", "").replace("\xa0", " ").strip()
+    cleaned = (
+        str(line or "")
+        .replace("RUR", "")
+        .replace("%", "")
+        .replace("\xa0", " ")
+        .strip()
+    )
     return [m.group(0).strip() for m in NUM_PATTERN.finditer(cleaned)]
 
 
@@ -114,9 +141,12 @@ def fmt_pct(x):
 def fmt_date(value):
     if value is None or pd.isna(value):
         return "—"
+
     dt = pd.to_datetime(value, errors="coerce", utc=True)
+
     if pd.isna(dt):
         return str(value)
+
     return dt.strftime("%d.%m.%y")
 
 
@@ -133,49 +163,81 @@ def get_color_for_delta(value):
 def get_section_lines(text, start_keywords, end_keywords=None):
     lines = split_lines(text)
     start_idx = None
+
+    start_keywords = [normalize_search_text(k) for k in start_keywords]
+
     for i, line in enumerate(lines):
-        low = line.lower()
-        if all(k.lower() in low for k in start_keywords):
+        low = normalize_search_text(line)
+        if all(k in low for k in start_keywords):
             start_idx = i
             break
+
     if start_idx is None:
         return []
+
     if not end_keywords:
         return lines[start_idx:]
+
+    end_keywords = [normalize_search_text(k) for k in end_keywords]
+
     for j in range(start_idx + 1, len(lines)):
-        low = lines[j].lower()
-        if all(k.lower() in low for k in end_keywords):
+        low = normalize_search_text(lines[j])
+        if all(k in low for k in end_keywords):
             return lines[start_idx:j]
+
     return lines[start_idx:]
 
 
 def find_first_line(lines, includes=None, startswith=None):
-    includes = [x.lower() for x in (includes or [])]
-    startswith = startswith.lower() if startswith else None
+    includes = [normalize_search_text(x) for x in (includes or [])]
+    startswith = normalize_search_text(startswith) if startswith else None
+
     for line in lines:
-        low = line.lower()
+        low = normalize_search_text(line)
+
         if startswith and not low.startswith(startswith):
             continue
+
         if includes and not all(x in low for x in includes):
             continue
+
         return line
+
     return None
 
 
 def extract_month_accum_values(line: str):
+    """
+    Берём именно Month Accum:
+    tokens[3] = Accum.
+    tokens[4] = Bu. Accum.
+    tokens[5] = LY. Accum.
+
+    Важно:
+    строка может содержать только 6 чисел, особенно Service/Kitchen hour.
+    Поэтому len(tokens) >= 6 достаточно.
+    """
     if not line:
         return None, None, None, None, None
+
     tokens = extract_tokens(line)
-    if len(tokens) < 8:
+
+    if len(tokens) < 6:
         return None, None, None, None, None
-    actual = parse_number(tokens[5])
-    budget = parse_number(tokens[6])
-    ly = parse_number(tokens[7])
-    return actual, budget, ly, safe_pct(actual, budget), safe_pct(actual, ly)
+
+    actual = parse_number(tokens[3])
+    budget = parse_number(tokens[4])
+    ly = parse_number(tokens[5])
+
+    vs_budget = safe_pct(actual, budget)
+    vs_ly = safe_pct(actual, ly)
+
+    return actual, budget, ly, vs_budget, vs_ly
 
 
 def extract_doc_date(first_page_text: str):
     lines = split_lines(first_page_text)
+
     for line in lines[:8]:
         for pattern in DATE_PATTERNS:
             m = pattern.search(line)
@@ -186,6 +248,7 @@ def extract_doc_date(first_page_text: str):
                         return datetime.strptime(raw, fmt).strftime("%Y-%m-%d")
                     except ValueError:
                         pass
+
     return datetime.now().strftime("%Y-%m-%d")
 
 
@@ -193,11 +256,15 @@ def parse_pdf(file):
     with pdfplumber.open(file) as pdf:
         pages = []
         first_page_text = ""
+
         for i, page in enumerate(pdf.pages):
             txt = normalize_spaces(page.extract_text() or "")
+
             if i == 0:
                 first_page_text = txt
+
             pages.append(txt)
+
         text = "\n".join(pages)
 
     doc_date = extract_doc_date(first_page_text)
@@ -208,17 +275,33 @@ def parse_pdf(file):
     hotel_total_lines = get_section_lines(text, ["hotel total"], ["month", "year"]) or get_section_lines(text, ["hotel total"])
 
     data = {}
-    data["revpar"] = extract_month_accum_values(find_first_line(accommodation_lines, startswith="revpar"))
-    data["fb_total_revenue"] = extract_month_accum_values(find_first_line(total_fb_lines, startswith="total revenue"))
-    data["service_hour"] = extract_month_accum_values(find_first_line(total_fb_lines, includes=["rev.", "wtrs. hour"]))
-    data["kitchen_hour"] = extract_month_accum_values(find_first_line(total_fb_lines, includes=["rev.", "ktch. hour"]))
-    data["hotel_total_revenue"] = extract_month_accum_values(find_first_line(hotel_total_lines, startswith="total revenue"))
+
+    data["revpar"] = extract_month_accum_values(
+        find_first_line(accommodation_lines, startswith="revpar")
+    )
+
+    data["fb_total_revenue"] = extract_month_accum_values(
+        find_first_line(total_fb_lines, startswith="total revenue")
+    )
+
+    data["service_hour"] = extract_month_accum_values(
+        find_first_line(total_fb_lines, includes=["rev", "wtrs", "hour"])
+    )
+
+    data["kitchen_hour"] = extract_month_accum_values(
+        find_first_line(total_fb_lines, includes=["rev", "ktch", "hour"])
+    )
+
+    data["hotel_total_revenue"] = extract_month_accum_values(
+        find_first_line(hotel_total_lines, startswith="total revenue")
+    )
 
     return doc_date, hotel, data
 
 
 def flatten_history_row(doc_date, hotel, data):
     row = {"date": doc_date, "hotel": hotel}
+
     for metric_key, values in data.items():
         actual, budget, ly, vs_budget, vs_ly = values
         row[f"{metric_key}_actual"] = actual
@@ -226,6 +309,7 @@ def flatten_history_row(doc_date, hotel, data):
         row[f"{metric_key}_ly"] = ly
         row[f"{metric_key}_vs_budget"] = vs_budget
         row[f"{metric_key}_vs_ly"] = vs_ly
+
     return row
 
 
@@ -239,7 +323,12 @@ def get_secret_key():
 
 def load_history():
     try:
-        response = requests.get(get_script_url(), params={"key": get_secret_key()}, timeout=20)
+        response = requests.get(
+            get_script_url(),
+            params={"key": get_secret_key()},
+            timeout=20
+        )
+
         response.raise_for_status()
         result = response.json()
 
@@ -248,16 +337,20 @@ def load_history():
             return pd.DataFrame()
 
         rows = result.get("rows", [])
+
         if not rows:
             return pd.DataFrame()
 
         df = pd.DataFrame(rows)
+        df.columns = [str(c).strip() for c in df.columns]
 
         for col in df.columns:
             if col not in ["date", "hotel"]:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
 
-        df["date"] = df["date"].astype(str)
+        if "date" in df.columns:
+            df["date"] = df["date"].astype(str)
+
         return df
 
     except Exception as e:
@@ -269,9 +362,18 @@ def save_full_history_to_google(df):
     try:
         df = df.copy()
         df = df.where(pd.notna(df), "")
-        payload = {"key": get_secret_key(), "rows": df.to_dict(orient="records")}
 
-        response = requests.post(get_script_url(), json=payload, timeout=30)
+        payload = {
+            "key": get_secret_key(),
+            "rows": df.to_dict(orient="records")
+        }
+
+        response = requests.post(
+            get_script_url(),
+            json=payload,
+            timeout=30
+        )
+
         response.raise_for_status()
         result = response.json()
 
@@ -296,11 +398,18 @@ def save_history(doc_date, hotel, data):
         for col in new_df.columns:
             if col not in history.columns:
                 history[col] = pd.NA
+
         for col in history.columns:
             if col not in new_df.columns:
                 new_df[col] = pd.NA
 
-        history = history[~((history["date"].astype(str) == str(doc_date)) & (history["hotel"] == hotel))]
+        history = history[
+            ~(
+                (history["date"].astype(str) == str(doc_date))
+                & (history["hotel"] == hotel)
+            )
+        ]
+
         final_df = pd.concat([history, new_df], ignore_index=True)
 
     if save_full_history_to_google(final_df):
@@ -309,9 +418,19 @@ def save_history(doc_date, hotel, data):
 
 def normalize_date_sort(df):
     df = df.copy()
-    df["_date"] = pd.to_datetime(df["date"], errors="coerce", utc=True)
+
+    df["_date"] = pd.to_datetime(
+        df["date"],
+        errors="coerce",
+        utc=True
+    )
+
     df["_date_sort"] = df["_date"].dt.strftime("%Y%m%d")
-    df["_date_sort"] = pd.to_numeric(df["_date_sort"], errors="coerce").fillna(0)
+    df["_date_sort"] = pd.to_numeric(
+        df["_date_sort"],
+        errors="coerce"
+    ).fillna(0)
+
     return df
 
 
@@ -349,13 +468,22 @@ def build_summary(data):
             notes.append(("Общая выручка отеля показывает сильный рост к прошлому году.", "good"))
 
     if hotel_total_vs_budget is not None:
-        notes.append(("Факт отеля ниже бюджета месяца.", "bad") if hotel_total_vs_budget < 0 else ("Факт отеля держится выше бюджета месяца.", "good"))
+        if hotel_total_vs_budget < 0:
+            notes.append(("Факт отеля ниже бюджета месяца.", "bad"))
+        else:
+            notes.append(("Факт отеля держится выше бюджета месяца.", "good"))
 
     if revpar_vs_ly is not None:
-        notes.append(("RevPAR ниже прошлого года.", "bad") if revpar_vs_ly < 0 else ("RevPAR выше прошлого года.", "good"))
+        if revpar_vs_ly < 0:
+            notes.append(("RevPAR ниже прошлого года.", "bad"))
+        else:
+            notes.append(("RevPAR выше прошлого года.", "good"))
 
     if fb_total_vs_ly is not None:
-        notes.append(("F&B total revenue проседает к прошлому году.", "bad") if fb_total_vs_ly < 0 else ("F&B total revenue растёт к прошлому году.", "good"))
+        if fb_total_vs_ly < 0:
+            notes.append(("F&B total revenue проседает к прошлому году.", "bad"))
+        else:
+            notes.append(("F&B total revenue растёт к прошлому году.", "good"))
 
     if service_vs_ly is not None and kitchen_vs_ly is not None:
         if service_vs_ly > kitchen_vs_ly:
@@ -384,6 +512,7 @@ def build_alerts(data):
 
     service_vs_ly = data["service_hour"][4]
     kitchen_vs_ly = data["kitchen_hour"][4]
+
     if service_vs_ly is not None and kitchen_vs_ly is not None and abs(service_vs_ly - kitchen_vs_ly) >= 10:
         alerts.append(("Сильный разрыв динамики между сервисом и кухней.", "warn"))
 
@@ -431,15 +560,22 @@ def show_metric_block(col, section_name, title, metric_name, values):
     with col:
         st.markdown(f"**{section_name}**")
         st.markdown(f"<div class='small-note'>{title}</div>", unsafe_allow_html=True)
-        st.metric(label=" ", value=format_value(metric_name, actual))
+
+        st.metric(
+            label=" ",
+            value=format_value(metric_name, actual)
+        )
+
         st.markdown(
             f"<span style='color:{get_color_for_delta(vs_budget)}; font-weight:700;'>vs Bu. Accum.: {format_pct(vs_budget)}</span>",
             unsafe_allow_html=True
         )
+
         st.markdown(
             f"<span style='color:{get_color_for_delta(vs_ly)}; font-weight:700;'>vs LY. Accum.: {format_pct(vs_ly)}</span>",
             unsafe_allow_html=True
         )
+
         st.markdown(
             f"<span class='small-note'>Bu: {format_value(metric_name, budget)} | LY: {format_value(metric_name, ly)}</span>",
             unsafe_allow_html=True
@@ -448,6 +584,7 @@ def show_metric_block(col, section_name, title, metric_name, values):
 
 def build_compare_table(latest):
     rows = []
+
     for _, row in latest.iterrows():
         rows.append({
             "Hotel": row["hotel"],
@@ -458,6 +595,7 @@ def build_compare_table(latest):
             "Service % LY": row.get("service_hour_vs_ly"),
             "Kitchen % LY": row.get("kitchen_hour_vs_ly"),
         })
+
     return pd.DataFrame(rows)
 
 
@@ -480,6 +618,7 @@ def get_status_badge(row):
         return "Риск", "#92400E", "#FEF3C7"
     if strong >= 3:
         return "Рост", "#166534", "#DCFCE7"
+
     return "Норма", "#1D4ED8", "#DBEAFE"
 
 
@@ -542,9 +681,13 @@ def make_pretty_history(history):
 
     for col in display_df.columns:
         if "%" in col:
-            display_df[col] = display_df[col].apply(lambda x: "—" if pd.isna(x) else f"{x:+.1f}%")
+            display_df[col] = display_df[col].apply(
+                lambda x: "—" if pd.isna(x) else f"{x:+.1f}%"
+            )
         elif "Факт" in col:
-            display_df[col] = display_df[col].apply(lambda x: "—" if pd.isna(x) else f"{x:,.0f}".replace(",", " "))
+            display_df[col] = display_df[col].apply(
+                lambda x: "—" if pd.isna(x) else f"{x:,.0f}".replace(",", " ")
+            )
 
     return display_df
 
@@ -589,6 +732,7 @@ else:
         st.write("Недостаточно данных")
     else:
         render_kpi_dashboard(latest)
+
         compare_df = build_compare_table(latest)
         st.dataframe(compare_df, use_container_width=True, hide_index=True)
 
@@ -598,64 +742,63 @@ st.subheader("Графики по отелю")
 if history.empty:
     st.write("Нет данных")
 else:
-    hotel_filter = st.selectbox(
-        "Выбери отель",
-        sorted(history["hotel"].dropna().unique().tolist())
+    history_chart = history.copy()
+    history_chart.columns = [str(c).strip() for c in history_chart.columns]
+
+    history_chart["_date"] = pd.to_datetime(
+        history_chart["date"],
+        errors="coerce",
+        utc=True
     )
 
-    filtered = history[history["hotel"] == hotel_filter].copy()
+    history_chart = history_chart.dropna(subset=["_date"])
 
-    if filtered.empty:
-        st.write("Нет данных по выбранному отелю")
+    metric_options = {
+        "Hotel Total Revenue": "hotel_total_revenue_actual",
+        "RevPAR": "revpar_actual",
+        "F&B Total Revenue": "fb_total_revenue_actual",
+        "Service / wtrs. hour": "service_hour_actual",
+        "Kitchen / ktch. hour": "kitchen_hour_actual",
+    }
+
+    hotel_filter = st.selectbox(
+        "Выбери отель",
+        sorted(history_chart["hotel"].dropna().unique().tolist()),
+        key="chart_hotel_filter"
+    )
+
+    selected_metric_name = st.selectbox(
+        "Показатель",
+        list(metric_options.keys()),
+        index=0,
+        key="chart_metric_filter"
+    )
+
+    chart_column = metric_options[selected_metric_name]
+
+    filtered = history_chart[history_chart["hotel"] == hotel_filter].copy()
+
+    if chart_column not in filtered.columns:
+        st.error(f"Колонка не найдена: {chart_column}")
+        st.write("Доступные колонки:", list(filtered.columns))
     else:
-        # Парсим дату и убираем timezone для совместимости с st.line_chart
-        filtered["_date"] = pd.to_datetime(filtered["date"], errors="coerce", utc=True)
-        filtered["_date"] = filtered["_date"].dt.tz_localize(None)  # <-- FIX
-        filtered = filtered.dropna(subset=["_date"]).sort_values("_date")
-
-        chart_metric_base = st.selectbox(
-            "Показатель",
-            [
-                "hotel_total_revenue",
-                "revpar",
-                "fb_total_revenue",
-                "service_hour",
-                "kitchen_hour",
-            ],
-            index=0
+        filtered[chart_column] = pd.to_numeric(
+            filtered[chart_column],
+            errors="coerce"
         )
 
-        chart_column = f"{chart_metric_base}_actual"
+        chart_df = filtered[["_date", chart_column]].dropna().copy()
+        chart_df = chart_df.sort_values("_date")
 
-        nice_names = {
-            "hotel_total_revenue": "Hotel Total Revenue",
-            "revpar": "RevPAR",
-            "fb_total_revenue": "F&B Total Revenue",
-            "service_hour": "Service / wtrs. hour",
-            "kitchen_hour": "Kitchen / ktch. hour",
-        }
-
-        if chart_column not in filtered.columns:
-            st.warning(f"Колонка {chart_column} отсутствует в данных.")
-            st.write("Доступные колонки:", filtered.columns.tolist())
+        if chart_df.empty:
+            st.warning(f"Нет числовых данных для графика: {selected_metric_name}")
+            st.write(filtered[["date", "hotel", chart_column]].tail(20))
         else:
-            chart_df = filtered[["_date", chart_column]].copy()
-            # Принудительно конвертируем в float
-            chart_df[chart_column] = pd.to_numeric(chart_df[chart_column], errors="coerce")
-            chart_df = chart_df.dropna(subset=[chart_column])
+            chart_df = chart_df.set_index("_date")[[chart_column]]
+            chart_df = chart_df.rename(columns={chart_column: selected_metric_name})
 
-            if chart_df.empty:
-                st.warning("Нет числовых данных для построения графика.")
-            else:
-                chart_df = chart_df.sort_values("_date").set_index("_date")
-                chart_df = chart_df.rename(columns={chart_column: nice_names[chart_metric_base]})
-
-                st.markdown(f"**{nice_names[chart_metric_base]}**")
-                try:
-                    st.line_chart(chart_df)
-                except Exception as e:
-                    st.error(f"Ошибка рендера графика: {e}")
-                    st.dataframe(chart_df.reset_index())
+            st.markdown(f"**{selected_metric_name}**")
+            st.line_chart(chart_df)
 
 st.markdown("---")
 st.subheader("Пополнить историю")
@@ -678,7 +821,10 @@ if uploaded_history:
 
         if "date" in combined.columns and "hotel" in combined.columns:
             combined["date"] = combined["date"].astype(str)
-            combined = combined.drop_duplicates(subset=["date", "hotel"], keep="last")
+            combined = combined.drop_duplicates(
+                subset=["date", "hotel"],
+                keep="last"
+            )
 
         if save_full_history_to_google(combined):
             st.success("История успешно пополнена и сохранена в Google Sheets.")
@@ -694,6 +840,7 @@ if history.empty:
     st.write("Нет данных")
 else:
     history_for_display = normalize_date_sort(history)
+
     history_for_display = history_for_display.sort_values(
         by=["_date_sort", "hotel"],
         ascending=[True, True]
@@ -703,6 +850,7 @@ else:
     st.dataframe(display_df, use_container_width=True)
 
     csv = history.to_csv(index=False).encode("utf-8-sig")
+
     st.download_button(
         label="📥 Скачать историю CSV",
         data=csv,
