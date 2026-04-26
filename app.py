@@ -598,51 +598,61 @@ st.subheader("Графики по отелю")
 if history.empty:
     st.write("Нет данных")
 else:
-    hotel_filter = st.selectbox(
-        "Выбери отель",
-        sorted(history["hotel"].dropna().unique().tolist())
+    history_chart = history.copy()
+
+    history_chart["_date"] = pd.to_datetime(
+        history_chart["date"],
+        errors="coerce",
+        utc=True
     )
 
-    filtered = history[history["hotel"] == hotel_filter].copy()
+    history_chart = history_chart.dropna(subset=["_date"])
+
+    hotel_filter = st.selectbox(
+        "Выбери отель",
+        sorted(history_chart["hotel"].dropna().unique().tolist())
+    )
+
+    filtered = history_chart[history_chart["hotel"] == hotel_filter].copy()
 
     if filtered.empty:
         st.write("Нет данных по выбранному отелю")
     else:
-        filtered["_date"] = pd.to_datetime(filtered["date"], errors="coerce", utc=True)
-        filtered = filtered.dropna(subset=["_date"]).sort_values("_date")
+        metric_options = {
+            "Hotel Total Revenue": "hotel_total_revenue_actual",
+            "RevPAR": "revpar_actual",
+            "F&B Total Revenue": "fb_total_revenue_actual",
+            "Service / wtrs. hour": "service_hour_actual",
+            "Kitchen / ktch. hour": "kitchen_hour_actual",
+        }
 
-        chart_metric_base = st.selectbox(
+        selected_metric_name = st.selectbox(
             "Показатель",
-            [
-                "hotel_total_revenue",
-                "revpar",
-                "fb_total_revenue",
-                "service_hour",
-                "kitchen_hour",
-            ],
+            list(metric_options.keys()),
             index=0
         )
 
-        chart_column = f"{chart_metric_base}_actual"
+        chart_column = metric_options[selected_metric_name]
 
-        nice_names = {
-            "hotel_total_revenue": "Hotel Total Revenue",
-            "revpar": "RevPAR",
-            "fb_total_revenue": "F&B Total Revenue",
-            "service_hour": "Service / wtrs. hour",
-            "kitchen_hour": "Kitchen / ktch. hour",
-        }
+        if chart_column not in filtered.columns:
+            st.warning(f"Колонка {chart_column} не найдена в истории.")
+        else:
+            filtered[chart_column] = pd.to_numeric(
+                filtered[chart_column],
+                errors="coerce"
+            )
 
-        if chart_column in filtered.columns:
             chart_df = filtered[["_date", chart_column]].dropna().copy()
             chart_df = chart_df.sort_values("_date")
-            chart_df = chart_df.set_index("_date")[[chart_column]]
-            chart_df = chart_df.rename(columns={chart_column: nice_names[chart_metric_base]})
 
-            st.markdown(f"**{nice_names[chart_metric_base]}**")
-            st.line_chart(chart_df)
-        else:
-            st.write("Нет данных по выбранному показателю")
+            if chart_df.empty:
+                st.warning(f"Нет числовых данных для показателя: {selected_metric_name}")
+            else:
+                chart_df = chart_df.set_index("_date")
+                chart_df = chart_df.rename(columns={chart_column: selected_metric_name})
+
+                st.markdown(f"**{selected_metric_name}**")
+                st.line_chart(chart_df)
 
 st.markdown("---")
 st.subheader("Пополнить историю")
